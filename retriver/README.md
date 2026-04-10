@@ -223,14 +223,4 @@ All tunable constants live in [`config.py`](config.py). Key parameters:
 
 ---
 
-## Key Design Decisions
 
-1. **Query-adaptive fusion weights** — Lexical queries (direct schema token matches) boost BM25 + column matching; semantic queries boost bi-encoder weight.
-
-2. **Junction table suppression** — Junction/bridge tables (e.g., `singer_in_concert`) are penalized in Stage 1 scoring unless explicitly mentioned in the question. They are later discovered by Bridge BFS (Stage 4) when needed to connect entity tables.
-
-3. **Distinctive column matching** — Generic column name parts like `name`, `type`, `status` are treated as trivial and don't count as matches. Only distinctive parts trigger column relevance (e.g., `song_name` → "song" is distinctive, "name" is trivial).
-
-4. **FK-consistent output** — Foreign key lines are only emitted when BOTH endpoint columns are present in the pruned output, ensuring consistency between the schema and FK sections.
-
-5. **Primary vs. supporting tables** — Tables selected by scoring (primary) get full column pruning with cross-encoder. Tables added by FK expansion or BFS (supporting) only get structural + text-matched columns.
