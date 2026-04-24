@@ -495,10 +495,10 @@ def token_f1(pred, gold):
 | 2 | **Column F1 is low (68.52)** — Column retrieval is the weakest component. Tables with many similarly-named columns cause confusion. | Medium | Open |
 | 3 | **Error propagation in Dual Transformer** — If T1 (Planner) generates a wrong plan due to retrieval error, T2 (SQL Generator) will also produce wrong SQL. | Medium | Open |
 | 4 | **Context length limit (512 tokens)** — Very complex schemas with many tables and columns may get truncated, losing information. | Medium | Open |
-| 5 | **Plan format limited coverage** — The SCAN/FILTER/AGGREGATE/PROJECT plan format does not cover all SQL constructs (e.g., HAVING, EXISTS, window functions, nested subqueries). | Low | Open |
-| 6 | **No support for multi-turn dialogue** — Each question is treated independently; context from previous queries in a session is not preserved. | Low | Open |
-| 7 | **Large base model size** — Flan-T5-XL (3B parameters) requires significant GPU memory. Running on CPU is very slow. | Low | By Design |
-| 8 | **Column Mention and Value Pattern signals removed** — Earlier design had 4 retriever signals; current version uses only 2 (BM25 + Bi-encoder). Removing these may have hurt column-level retrieval. | Low | Open |
+
+| 5 | **No support for multi-turn dialogue** — Each question is treated independently; context from previous queries in a session is not preserved. | Low | Open |
+| 6 | **Large base model size** — Flan-T5-XL (3B parameters) requires significant GPU memory. Running on CPU is very slow. | Low | By Design |
+| 7 | **Column Mention and Value Pattern signals removed** — Earlier design had 4 retriever signals; current version uses only 2 (BM25 + Bi-encoder). Removing these may have hurt column-level retrieval. | Low | Open |
 
 ---
 
