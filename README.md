@@ -600,8 +600,8 @@ Version mismatches between PEFT and Transformers can cause silent failures in Lo
 
 | Name | Roll Number | Contribution |
 |---|---|---|
-| Mayank Tewatia | 142301022 | Retriever pipeline, BFS/FK graph, dataset preprocessing |
-| Harsh | 142301010 | Dual Transformer training, evaluation, repository maintenance |
+| Mayank Tewatia | 142301022 | Dual Transformer training, evaluation, repository maintenance |
+| Harsh | 142301010 | Retriever pipeline, BFS/FK graph, dataset preprocessing |
 | Sai Varun | 142301040 | Single Transformer training, LoRA fine-tuning, experiments |
 
 ### Academic References
@@ -626,25 +626,7 @@ This project builds on the following foundational work:
 - [rank_bm25](https://github.com/dorianbrown/rank_bm25) — BM25 scoring
 - [Google Colab](https://colab.research.google.com/) — Training environment
 
----
 
-## Contact
-
-For questions, bug reports, or collaboration:
-
-| Person | Contact |
-|---|---|
-| Harsh (Repository Maintainer) | GitHub: [@harsh1243](https://github.com/harsh1243) |
-| Mayank Tewatia | GitHub: [@MayankTewatia](https://github.com/) |
-| Sai Varun | GitHub: [@SaiVarun](https://github.com/) |
-
-To report a bug, please open an [Issue](https://github.com/harsh1243/text-to-sql/issues) on GitHub with:
-1. A description of the problem
-2. Steps to reproduce
-3. Expected vs actual output
-4. Environment details (Python version, GPU, CUDA version)
-
----
 
 ## License
 
