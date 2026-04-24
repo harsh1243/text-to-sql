@@ -24,7 +24,6 @@
 - [Known Bugs and Issues](#known-bugs-and-issues)
 - [Troubleshooting](#troubleshooting)
 - [Credits and Acknowledgments](#credits-and-acknowledgments)
-- [Contact](#contact)
 - [License](#license)
 
 ---
