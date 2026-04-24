@@ -23,7 +23,6 @@
 - [Results](#results)
 - [Known Bugs and Issues](#known-bugs-and-issues)
 - [Troubleshooting](#troubleshooting)
-- [Credits and Acknowledgments](#credits-and-acknowledgments)
 - [License](#license)
 
 ---
@@ -593,15 +592,7 @@ Version mismatches between PEFT and Transformers can cause silent failures in Lo
 
 ---
 
-## Credits and Acknowledgments
 
-### Authors
-
-| Name | Roll Number | Contribution |
-|---|---|---|
-| Mayank Tewatia | 142301022 | Dual Transformer training, evaluation, repository maintenance |
-| Harsh | 142301010 | Retriever pipeline, BFS/FK graph, dataset preprocessing |
-| Sai Varun | 142301040 | Single Transformer training, LoRA fine-tuning, experiments |
 
 ### Academic References
 
@@ -655,4 +646,4 @@ SOFTWARE.
 
 ---
 
-*NLP Course Project · 2024 · Schema-Aware Text-to-SQL*
+*NLP Course Project · 2026 · Schema-Aware Text-to-SQL*
