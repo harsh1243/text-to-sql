@@ -19,10 +19,9 @@ AGGR_WORDS     = {"number", "count", "how many", "total", "average",
                   "maximum", "minimum", "most", "least", "each", "per"}
 
 # ─── Fusion signal weights — base values, adjusted per query type ─────────────
-W_BIENCODER_BASE = 0.40
-W_BM25_BASE      = 0.25
-W_COLMATCH_BASE  = 0.20
-W_VALUE_BASE     = 0.10
+W_BIENCODER_BASE = 0.60
+W_BM25_BASE      = 0.45
+
 
 # Query-adaptive weight shifts
 LEXICAL_SHIFT  = 0.10
