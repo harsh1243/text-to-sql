@@ -17,7 +17,7 @@ Usage::
 
 from .scoring import (
     stage1_fusion, stage2_crossencoder,
-    expand_query, _detect_query_type,
+    expand_query, _detect_query_type,   # expand_query restored in scoring.py
 )
 from .selection import (
     adaptive_select, fk_neighbor_expansion,
@@ -96,11 +96,13 @@ def retrieve(
     if verbose:
         print("\n" + "="*65)
         print(f"QUESTION : {question}")
-        qtype = _detect_query_type(question, expand_query(question, synonyms), schema)
+        # FIX Bug 4: _detect_query_type now takes (question, schema) only
+        qtype = _detect_query_type(question, schema)
         print(f"Query type: {qtype}")
         print(f"\nStage 1 — Fusion (top candidates):")
-        for name, fs, bi, bm, cm, vp in candidates:
-            print(f"  {name:<25} fusion={fs:.3f}  bi={bi:.3f}  bm25={bm:.3f}  col={cm:.3f}  val={vp:.3f}")
+        # FIX Bug 3: tuple is now (name, fusion, bi, bm) — 4 elements not 6
+        for name, fs, bi, bm in candidates:
+            print(f"  {name:<25} fusion={fs:.3f}  bi={bi:.3f}  bm25={bm:.3f}")
         if use_cross_encoder:
             print(f"\nStage 2 — Cross-encoder reranked:")
             for name, cs in ranked:
