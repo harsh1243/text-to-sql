@@ -177,26 +177,17 @@ def stage1_fusion(question: str, schema: dict,
         w_bi = W_BIENCODER_BASE + SEMANTIC_SHIFT  # 0.70
         w_bm = W_BM25_BASE      - SEMANTIC_SHIFT  # 0.30
 
+
     results = []
-    for i, name in enumerate(table_names):
-        bi = bi_scores[i]
-        bm = bm25_norm[i]
-
-        # Hard keyword boost — table name literally in question
-        kb = 0.0
-        if name in q_lower or name.replace("_", " ") in q_lower:
-            kb = 0.30
-
-        # Junction table penalty — suppress unless explicitly mentioned
-        jp = 0.0
-        if classify_table_type(name, schema[name]) == "junction" and kb == 0.0:
-            jp = JUNCTION_PENALTY
-
-        fusion = w_bi * bi + w_bm * bm + kb + jp
-        results.append((name, fusion, bi, bm))
-
-    results.sort(key=lambda x: x[1], reverse=True)
-    return results[:top_k_candidates]
+        for i, name in enumerate(table_names):
+            bi = bi_scores[i]
+            bm = bm25_norm[i]
+    
+            fusion = w_bi * bi + w_bm * bm
+            results.append((name, fusion, bi, bm))
+    
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:top_k_candidates]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
