@@ -8,6 +8,12 @@ Functions
 ---------
 - stage1_fusion(question, schema, synonyms, top_k) → ranked candidate list
 - stage2_crossencoder(question, candidates, schema)  → reranked list
+
+Shared helpers (also imported by selection.py)
+----------------------------------------------
+- expand_query(question, synonyms)
+- _soft_match(token_a, token_b)
+- _get_distinctive_parts(col_low)
 """
 
 import re
@@ -24,10 +30,43 @@ from .models import get_biencoder, get_crossencoder
 from .parser import classify_table_type
 
 
-# ─── Text helpers ─────────────────────────────────────────────────────────────
+# ─── Text helpers (also used by selection.py) ─────────────────────────────────
 
 def _tokenize(text: str) -> list:
     return re.findall(r'\b\w+\b', text.lower())
+
+
+def _soft_match(token_a: str, token_b: str) -> bool:
+    """Fuzzy token match — handles simple plurals / suffixes (name↔names)."""
+    if token_a == token_b:
+        return True
+    shorter, longer = sorted([token_a, token_b], key=len)
+    return longer.startswith(shorter) and (len(longer) - len(shorter)) <= 3
+
+
+def _get_distinctive_parts(col_low: str) -> set:
+    """
+    Return non-trivial parts of a column name.
+    e.g. song_name  → {"song"}   ("name" is too generic)
+         song_release_year → {"song", "release", "year"}
+    """
+    from .config import TRIVIAL_COL_PARTS
+    TRIVIAL = {'id', 'num', 'no', 'is', 'has', 'the', 'a', 'an'} | TRIVIAL_COL_PARTS
+    parts = set(re.split(r'[_\s]+', col_low)) - TRIVIAL
+    return {p for p in parts if len(p) > 2}
+
+
+def expand_query(question: str, synonyms: dict) -> set:
+    """
+    Expand question tokens using the provided synonym map.
+    Pass an empty dict for no expansion.
+    """
+    words = set(re.findall(r'\b\w+\b', question.lower()))
+    expanded = set(words)
+    for w in words:
+        if w in synonyms:
+            expanded.update(synonyms[w])
+    return expanded
 
 
 def make_table_description(table_name: str, info: dict) -> str:
