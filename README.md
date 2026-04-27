@@ -198,13 +198,13 @@ All retriever hyperparameters are stored in `retriver/config.py`:
 
 ```python
 # ── Fusion Scoring Weights ──────────────────────────────────────
-W_BIENCODER_BASE   = 0.40   # Weight for bi-encoder (dense) signal
-W_BM25_BASE        = 0.25   # Weight for BM25 (lexical) signal
+W_BIENCODER_BASE   = 0.60   # Weight for bi-encoder (dense) signal
+W_BM25_BASE        = 0.40   # Weight for BM25 (lexical) signal
 
 # ── Threshold Selection ─────────────────────────────────────────
 DROP_RATIO         = 0.65   # Keep tables above top_score × ratio
 GAP_RATIO          = 0.25   # Gap guard: stop if gap > top_score × ratio
-MAX_TABLES         = 5      # Maximum tables to select
+MAX_TABLES         = 6      # Maximum tables to select
 
 # ── Cross-Encoder Reranking ─────────────────────────────────────
 CE_WEIGHT          = 0.60   # Cross-encoder weight in combined score
