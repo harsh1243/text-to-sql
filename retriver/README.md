@@ -30,7 +30,7 @@ The retriever uses a **5-stage pipeline** where each stage progressively narrows
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Stage 1 — Multi-Signal Fusion Scoring                         │
-│  4 signals: Bi-encoder + BM25 + Column Mention + Value Pattern │
+│  2 signals: Bi-encoder + BM25  │
 │  Query-adaptive weights (lexical vs semantic queries)           │
 │  Output: Top 6 candidate tables with fusion scores             │
 └──────────────────────────┬──────────────────────────────────────┘
@@ -210,10 +210,8 @@ All tunable constants live in [`config.py`](config.py). Key parameters:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `W_BIENCODER_BASE` | 0.40 | Base weight for bi-encoder signal |
-| `W_BM25_BASE` | 0.25 | Base weight for BM25 signal |
-| `W_COLMATCH_BASE` | 0.20 | Base weight for column mention signal |
-| `W_VALUE_BASE` | 0.10 | Base weight for value pattern signal |
+| `W_BIENCODER_BASE` | 0.60 | Base weight for bi-encoder signal |
+| `W_BM25_BASE` | 0.4 | Base weight for BM25 signal |
 | `DROP_RATIO` | 0.65 | Adaptive threshold: keep tables above `top_score × ratio` |
 | `GAP_RATIO` | 0.25 | Gap guard: stop if score gap > `top_score × ratio` |
 | `MAX_TABLES` | 5 | Maximum tables to select |
