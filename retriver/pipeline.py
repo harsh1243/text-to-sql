@@ -26,6 +26,73 @@ from .selection import (
 from .formatter import format_schema_output, build_input_string
 
 
+def _validate_and_init(synonyms):
+    """Validate and initialize default arguments."""
+    if synonyms is None:
+        return {}
+    return synonyms
+
+
+def _fetch_candidates(question, schema, synonyms, use_cross_encoder):
+    """Stage 1 & 2: Fetch and rank candidates via fusion and optional cross-encoder."""
+    candidates = stage1_fusion(question, schema, synonyms, top_k_candidates=6)
+
+    if use_cross_encoder and len(candidates) > 1:
+        ranked = stage2_crossencoder(question, candidates, schema)
+    else:
+        ranked = [(name, score) for (name, score, *_) in candidates]
+
+    return candidates, ranked
+
+
+def _expand_and_bridge(ranked, question, schema, fk_graph):
+    """Stage 3 & 4: Select, expand via FK neighbors, and find bridge tables."""
+    selected = adaptive_select(ranked)
+    primary_tables = set(selected)
+
+    selected_expanded = fk_neighbor_expansion(selected, question, schema, fk_graph)
+    final_tables = find_bridge_tables(selected_expanded, fk_graph)
+
+    return selected, primary_tables, final_tables
+
+
+def _prune_and_format(final_tables, question, schema, synonyms, primary_tables):
+    """Stage 4.5 & 5: Prune columns and format the schema output."""
+    pruned_columns = stage_column_pruning(
+        final_tables, question, schema, synonyms, primary_tables)
+
+    schema_str, fk_str = format_schema_output(final_tables, schema, pruned_columns)
+    model_input = build_input_string(question, schema_str, fk_str)
+
+    return pruned_columns, schema_str, fk_str, model_input
+
+
+def _print_verbose(question, schema, candidates, ranked, selected,
+                   primary_tables, final_tables, pruned_columns,
+                   schema_str, fk_str, use_cross_encoder):
+    """Print stage-by-stage debug output when verbose=True."""
+    print("\n" + "="*65)
+    print(f"QUESTION : {question}")
+    qtype = _detect_query_type(question, schema)
+    print(f"Query type: {qtype}")
+    print(f"\nStage 1 — Fusion (top candidates):")
+    for name, fs, bi, bm in candidates:
+        print(f"  {name:<25} fusion={fs:.3f}  bi={bi:.3f}  bm25={bm:.3f}")
+    if use_cross_encoder:
+        print(f"\nStage 2 — Cross-encoder reranked:")
+        for name, score in ranked:
+            print(f"  {name:<25} ce_score={score:.3f}")
+    print(f"\nStage 3 — Adaptive select: {selected}")
+    print(f"Stage 3.5 — FK expanded:   {list(primary_tables)}")
+    print(f"Stage 4 — Bridge tables:   {final_tables}")
+    print(f"\nStage 4.5 — Pruned columns:")
+    for tbl, cols in pruned_columns.items():
+        print(f"  {tbl}: {cols}")
+    print(f"\nStage 5 — Schema:\n{schema_str}")
+    print(f"FKs:\n{fk_str}")
+    print("="*65 + "\n")
+
+
 def retrieve(
     question:          str,
     schema:            dict,   # from parse_schema()
@@ -62,61 +129,22 @@ def retrieve(
         fk_str          — multi-line foreign keys (for inspection)
         debug           — per-stage debug info (candidates, scores, etc.)
     """
-    if synonyms is None:
-        synonyms = {}
+    synonyms = _validate_and_init(synonyms)
 
-    # Stage 1: fusion scoring → top 6 candidates
-    candidates = stage1_fusion(question, schema, synonyms, top_k_candidates=6)
+    candidates, ranked = _fetch_candidates(question, schema, synonyms, use_cross_encoder)
 
-    # Stage 2: cross-encoder reranking
-    if use_cross_encoder and len(candidates) > 1:
-        ranked = stage2_crossencoder(question, candidates, schema)
-    else:
-        ranked = [(name, score) for (name, score, *_) in candidates]
+    selected, primary_tables, final_tables = _expand_and_bridge(
+        ranked, question, schema, fk_graph)
 
-    # Stage 3: adaptive threshold
-    selected = adaptive_select(ranked)
-    primary_tables = set(selected)   # tables chosen by scoring, not expansion
-
-    # Stage 3.5: FK neighbor expansion
-    selected_expanded = fk_neighbor_expansion(selected, question, schema, fk_graph)
-
-    # Stage 4: bridge BFS (iterative until stable)
-    final_tables = find_bridge_tables(selected_expanded, fk_graph)
-
-    # Stage 4.5: column pruning — primary tables get CE columns,
-    #            supporting tables only get structural + text-matched
-    pruned_columns = stage_column_pruning(
+    pruned_columns, schema_str, fk_str, model_input = _prune_and_format(
         final_tables, question, schema, synonyms, primary_tables)
 
-    # Stage 5: format
-    schema_str, fk_str = format_schema_output(final_tables, schema, pruned_columns)
-    model_input = build_input_string(question, schema_str, fk_str)
-
     if verbose:
-        print("\n" + "="*65)
-        print(f"QUESTION : {question}")
-        # FIX Bug 4: _detect_query_type now takes (question, schema) only
-        qtype = _detect_query_type(question, schema)
-        print(f"Query type: {qtype}")
-        print(f"\nStage 1 — Fusion (top candidates):")
-        # FIX Bug 3: tuple is now (name, fusion, bi, bm) — 4 elements not 6
-        for name, fs, bi, bm in candidates:
-            print(f"  {name:<25} fusion={fs:.3f}  bi={bi:.3f}  bm25={bm:.3f}")
-        if use_cross_encoder:
-            print(f"\nStage 2 — Cross-encoder reranked:")
-            for name, cs in ranked:
-                print(f"  {name:<25} cross={cs:.3f}")
-        print(f"\nStage 3  selected (scoring)  : {selected}")
-        print(f"Stage 3.5 after FK expansion : {selected_expanded}")
-        print(f"Stage 4  after BFS           : {final_tables}")
-        print(f"\nStage 4.5 columns kept:")
-        for t, cols in pruned_columns.items():
-            print(f"  {t}: {[c for c, _ in cols]}")
-        print(f"\nSCHEMA:\n{schema_str}")
-        print(f"\nFOREIGN KEYS:\n{fk_str}")
-        print(f"\nMODEL INPUT:\n{model_input}")
-        print("="*65)
+        _print_verbose(
+            question, schema, candidates, ranked, selected,
+            primary_tables, final_tables, pruned_columns,
+            schema_str, fk_str, use_cross_encoder,
+        )
 
     return {
         "model_input":     model_input,
@@ -124,9 +152,11 @@ def retrieve(
         "schema_str":      schema_str,
         "fk_str":          fk_str,
         "debug": {
-            "stage1":          candidates,
-            "ranked":          ranked,
-            "stage3":          selected,
-            "pruned_columns":  pruned_columns,
-        }
+            "candidates":     candidates,
+            "ranked":         ranked,
+            "selected":       selected,
+            "primary_tables": primary_tables,
+            "final_tables":   final_tables,
+            "pruned_columns": pruned_columns,
+        },
     }
