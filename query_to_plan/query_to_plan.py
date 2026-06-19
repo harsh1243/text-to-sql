@@ -99,161 +99,149 @@ def _maybe_walk_cte(node, steps, depth):
         _walk(with_, steps, depth)
 
 
-# ── SELECT planner ────────────────────────────────────────────────────────────
+# ── SELECT planner (decomposed) ───────────────────────────────────────────────
 
 def _plan_select(node: exp.Select, steps, depth):
+    """Coordinate all SELECT clause planning by delegating to focused helpers."""
+    _plan_ctes(node, steps, depth)
+    _plan_from_joins(node, steps, depth)
+    _plan_predicates(node, steps, depth)
+    _plan_groupby(node, steps, depth)
+    _plan_having(node, steps, depth)
+    _plan_projections(node, steps, depth)
+    _plan_distinct(node, steps, depth)
+    _plan_orderby(node, steps, depth)
+    _plan_limit_offset(node, steps, depth)
 
-    # 1. WITH attached to this SELECT  (F11: key is "with_")
+
+def _plan_ctes(node: exp.Select, steps, depth):
+    """Step 1: Handle WITH / CTEs attached to this SELECT."""
     _maybe_walk_cte(node, steps, depth)
 
-    # 2. FROM  (F11: key is "from_")
+
+def _plan_from_joins(node: exp.Select, steps, depth):
+    """Step 2: Handle FROM clause and JOINs."""
     from_ = node.args.get("from_")
     if from_:
         _scan(from_.this, steps, depth)
     else:
         steps.append((depth, "DUAL", "No FROM clause — evaluate constant expression"))
+        return
 
-    # 3. JOINs
-    for join in (node.args.get("joins") or []):
-        _scan(join.this, steps, depth)
+    for join in node.args.get("joins") or []:
+        join_type = (join.args.get("kind") or "INNER").upper()
+        join_tbl  = join.this
+        condition = join.args.get("on")
+        tbl_name  = _table_name(join_tbl)
+        cond_sql  = condition.sql() if condition else "NATURAL / USING"
+        steps.append((depth, f"{join_type} JOIN",
+                      f"Join with {tbl_name} ON {cond_sql}"))
+        _subqueries_in_expr(join_tbl, steps, depth + 1)
+        if condition:
+            _subqueries_in_expr(condition, steps, depth + 1)
 
-        jtype  = _join_type(join)
-        jstrat = _join_strategy(join)
-        on     = join.args.get("on")
-        using  = join.args.get("using")
 
-        if on:
-            cond = f"ON {on.sql(dialect='sqlite')}"
-        elif using:
-            cols = ", ".join(c.name for c in using)
-            cond = f"USING ({cols})"
-        else:
-            cond = "(cross / natural)"
-
-        steps.append((depth, f"{jtype} JOIN",
-                      f"{jstrat} join — {cond}"))
-
-    # 4. WHERE
+def _plan_predicates(node: exp.Select, steps, depth):
+    """Step 3: Handle WHERE clause predicates."""
     where = node.args.get("where")
     if where:
-        _walk_where(where, steps, depth)
+        steps.append((depth, "FILTER (WHERE)", where.this.sql()))
+        _subqueries_in_expr(where.this, steps, depth + 1)
 
-    # 5. GROUP BY
+
+def _plan_groupby(node: exp.Select, steps, depth):
+    """Step 4: Handle GROUP BY clause."""
     group = node.args.get("group")
     if group:
-        cols = ", ".join(e.sql(dialect="sqlite") for e in group.expressions)
-        steps.append((depth, "GROUP BY", f"Group rows by: {cols}"))
+        cols = ", ".join(e.sql() for e in group.expressions)
+        steps.append((depth, "GROUP BY", f"Group rows by {cols}"))
 
-    # 6. HAVING
+
+def _plan_having(node: exp.Select, steps, depth):
+    """Step 5: Handle HAVING clause."""
     having = node.args.get("having")
     if having:
-        steps.append((depth, "HAVING",
-                      f"Filter groups: {having.this.sql(dialect='sqlite')}"))
+        steps.append((depth, "FILTER (HAVING)", having.this.sql()))
+        _subqueries_in_expr(having.this, steps, depth + 1)
 
-    # 7. SELECT list (projections + subqueries in expressions)
-    _walk_select_list(node, steps, depth)
 
-    # 8. DISTINCT
+def _plan_projections(node: exp.Select, steps, depth):
+    """Step 6: Handle SELECT projections / expressions."""
+    expressions = node.expressions
+    if expressions:
+        cols = ", ".join(e.sql() for e in expressions)
+        steps.append((depth, "PROJECT", f"Compute columns: {cols}"))
+        for expr in expressions:
+            _subqueries_in_expr(expr, steps, depth + 1)
+
+
+def _plan_distinct(node: exp.Select, steps, depth):
+    """Step 7: Handle DISTINCT modifier."""
     if node.args.get("distinct"):
         steps.append((depth, "DISTINCT", "Remove duplicate rows"))
 
-    # 9. ORDER BY
+
+def _plan_orderby(node: exp.Select, steps, depth):
+    """Step 8: Handle ORDER BY clause."""
     order = node.args.get("order")
     if order:
         cols = ", ".join(
-            f"{e.this.sql(dialect='sqlite')} {'DESC' if e.args.get('desc') else 'ASC'}"
+            f"{e.this.sql()} {'DESC' if e.args.get('desc') else 'ASC'}"
             for e in order.expressions
         )
-        steps.append((depth, "ORDER BY", f"Sort rows by: {cols}"))
+        steps.append((depth, "SORT", f"Order by {cols}"))
 
-    # 10. LIMIT / OFFSET
+
+def _plan_limit_offset(node: exp.Select, steps, depth):
+    """Step 9: Handle LIMIT and OFFSET clauses."""
     limit  = node.args.get("limit")
     offset = node.args.get("offset")
     if limit:
-        lval = limit.this.sql(dialect="sqlite")
-        oval = offset.this.sql(dialect="sqlite") if offset else "0"
-        steps.append((depth, "LIMIT",
-                      f"Return at most {lval} rows, skip {oval}"))
+        limit_val  = limit.this.sql()
+        offset_val = offset.this.sql() if offset else "0"
+        steps.append((depth, "LIMIT/OFFSET",
+                      f"Return at most {limit_val} rows, skip {offset_val}"))
 
 
-# ── SELECT list walker ────────────────────────────────────────────────────────
+# ── Scan helper ───────────────────────────────────────────────────────────────
 
-def _walk_select_list(node: exp.Select, steps, depth):
-    """Emit projection step and recurse into any subqueries in the SELECT list."""
-    exprs = node.expressions
-    if not exprs:
-        return
-
-    cols = ", ".join(e.sql(dialect="sqlite") for e in exprs)
-    steps.append((depth, "PROJECT", f"Compute columns: {cols}"))
-
-    for expr in exprs:
-        for sub in _subqueries_in_expr(expr):
-            steps.append((depth, "SCALAR-SUBQUERY",
-                          f"Evaluate scalar subquery: {sub.sql(dialect='sqlite')}"))
-            _walk(sub.this, steps, depth + 1)
-
-
-# ── WHERE walker ──────────────────────────────────────────────────────────────
-
-def _walk_where(where, steps, depth):
-    """Emit WHERE step and recurse into any subqueries in the predicate."""
-    steps.append((depth, "FILTER",
-                  f"Apply WHERE: {where.this.sql(dialect='sqlite')}"))
-    for sub in _subqueries_in_expr(where.this):
-        steps.append((depth, "SUBQUERY-FILTER",
-                      f"Evaluate subquery in WHERE: {sub.sql(dialect='sqlite')}"))
-        _walk(sub.this, steps, depth + 1)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _scan(source, steps, depth):
-    """Emit a scan/read step for a FROM source, recursing into subqueries."""
-    if isinstance(source, exp.Subquery):
-        alias = source.alias or "<subquery>"
+def _scan(table_node, steps, depth):
+    """Emit a SCAN or subquery step for a FROM target."""
+    if isinstance(table_node, exp.Subquery):
+        alias = table_node.alias or "<subquery>"
         steps.append((depth, "SUBQUERY", f"Evaluate subquery as '{alias}'"))
-        _walk(source.this, steps, depth + 1)
-    elif isinstance(source, exp.Table):
-        tname = source.name
-        alias = source.alias
-        label = f"Scan table '{tname}'" + (f" AS {alias}" if alias else "")
-        steps.append((depth, "SCAN", label))
+        _walk(table_node.this, steps, depth + 1)
+    elif isinstance(table_node, exp.Table):
+        steps.append((depth, "SCAN", f"Full scan of table '{table_node.name}'"))
     else:
-        steps.append((depth, "SOURCE", str(source)))
+        steps.append((depth, "SCAN", f"Scan: {table_node.sql()}"))
 
 
-def _subqueries_in_expr(expr):
-    """Yield all Subquery nodes that are direct children of expr."""
+# ── Subquery detector ─────────────────────────────────────────────────────────
+
+def _subqueries_in_expr(expr, steps, depth):
+    """Walk an expression tree and plan any embedded subqueries."""
     if expr is None:
         return
-    for node in expr.walk():
-        if isinstance(node, exp.Subquery):
-            yield node
+    for subq in expr.find_all(exp.Subquery):
+        alias = subq.alias or "<subquery>"
+        steps.append((depth, "SUBQUERY", f"Evaluate subquery as '{alias}'"))
+        _walk(subq.this, steps, depth + 1)
 
 
-def _join_type(join) -> str:
-    if join.args.get("cross"):
-        return "CROSS"
-    if join.args.get("left"):
-        return "LEFT"
-    if join.args.get("right"):
-        return "RIGHT"
-    if join.args.get("full"):
-        return "FULL OUTER"
-    return "INNER"
+# ── Utility ───────────────────────────────────────────────────────────────────
 
-
-def _join_strategy(join) -> str:
-    if join.args.get("hash"):
-        return "Hash"
-    if join.args.get("merge"):
-        return "Merge"
-    return "Nested-loop"
+def _table_name(node) -> str:
+    """Return a human-readable name for a join target."""
+    if isinstance(node, exp.Table):
+        return node.name
+    if isinstance(node, exp.Subquery):
+        return node.alias or "<subquery>"
+    return node.sql()
 
 
 def _visit(node, steps, depth):
-    """Visit a node, used for direct dispatch from external callers."""
+    """Generic visitor — delegates back to _walk."""
     _walk(node, steps, depth)
 
 
