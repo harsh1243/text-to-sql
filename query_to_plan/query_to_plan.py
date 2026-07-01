@@ -77,7 +77,7 @@ def _walk(node, steps, depth=0):
 
 def _maybe_walk_cte(node, steps, depth):
     """Emit CTE steps for CTEs attached directly to a set-op or select node."""
-    with_ = node.args.get("with_")           # F11: key is "with_" not "with"
+    with_ = node.args.get("with")           # F11: key is "with_" not "with"
     if with_:
         _walk(with_, steps, depth)
 
@@ -90,7 +90,7 @@ def _plan_select(node: exp.Select, steps, depth):
     _maybe_walk_cte(node, steps, depth)
 
     # 2. FROM  (F11: key is "from_")
-    from_ = node.args.get("from_")
+    from_ = node.args.get("from")
     if from_:
         _scan(from_.this, steps, depth)
     else:
@@ -188,7 +188,8 @@ def _plan_select(node: exp.Select, steps, depth):
     limit  = node.args.get("limit")
     if offset:
         val = offset.args.get("expression") or offset.args.get("this")
-        steps.append((depth, "OFFSET", f"Skip {val.sql()} rows"))
+        if val is not None:
+            steps.append((depth, "OFFSET", f"Skip {val.sql()} rows"))
     if limit:
         val = limit.args.get("expression") or limit.args.get("this")
         steps.append((depth, "LIMIT", f"Return at most {val.sql()} rows"))
@@ -210,7 +211,7 @@ def _subqueries_in_expr(expr, steps, depth):
     if isinstance(expr, exp.In):
         query = expr.args.get("query")
         if query:
-            neg = "NOT IN" if (expr.args.get("negate") or expr.args.get("not")) else "IN"
+            neg = "IN"
             steps.append((depth, "SUBQUERY", f"Evaluate {neg} subquery"))
             _walk(query, steps, depth + 1)
             return
