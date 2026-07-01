@@ -179,15 +179,15 @@ def stage1_fusion(question: str, schema: dict,
 
 
     results = []
-        for i, name in enumerate(table_names):
-            bi = bi_scores[i]
-            bm = bm25_norm[i]
-    
-            fusion = w_bi * bi + w_bm * bm
-            results.append((name, fusion, bi, bm))
-    
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:top_k_candidates]
+    for i, name in enumerate(table_names):
+        bi = bi_scores[i]
+        bm = bm25_norm[i]
+
+        fusion = w_bi * bi + w_bm * bm
+        results.append((name, fusion, bi, bm))
+
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[:top_k_candidates]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
