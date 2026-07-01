@@ -81,8 +81,9 @@ def fk_neighbor_expansion(selected: list, question: str,
     TRIVIAL  = {'id', 'num', 'no', 'is', 'has', 'the', 'a', 'an'}
 
     for nb in candidates:
-        # (a) Table name appears in question as substring
-        if nb in q_lower or nb.replace('_', ' ') in q_lower:
+        # (a) Table name appears in question at a word boundary
+        if nb in q_tokens or re.search(
+                rf'\b{re.escape(nb.replace("_", " "))}\b', q_lower):
             expanded.add(nb)
             continue
 
