@@ -101,7 +101,7 @@ def retrieve(
         print(f"Query type: {qtype}")
         print(f"\nStage 1 — Fusion (top candidates):")
         # FIX Bug 3: tuple is now (name, fusion, bi, bm) — 4 elements not 6
-        for name, fs, bi, bm in candidates:
+        for name, fs, bi, bm, *_ in candidates:
             print(f"  {name:<25} fusion={fs:.3f}  bi={bi:.3f}  bm25={bm:.3f}")
         if use_cross_encoder:
             print(f"\nStage 2 — Cross-encoder reranked:")
