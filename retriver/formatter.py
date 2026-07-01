@@ -52,9 +52,10 @@ def format_schema_output(selected_tables: list, schema: dict,
         columns = (pruned_columns[table]
                    if pruned_columns and table in pruned_columns
                    else info.get("columns", []))
+        pks_low = {p.lower() for p in info.get("pks", [])}
         col_parts = []
         for (col_orig, _) in columns:
-            tag = " [PK]" if col_orig.lower() in info.get("pks", []) else ""
+            tag = " [PK]" if col_orig.lower() in pks_low else ""
             col_parts.append(f"{col_orig}{tag}")
         schema_lines.append(f"{table} ( {', '.join(col_parts)} )")
 
