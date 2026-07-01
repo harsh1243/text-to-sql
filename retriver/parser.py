@@ -36,10 +36,26 @@ def parse_schema(sql_text: str) -> dict:
         }
     """
     schema = {}
-    blocks = re.findall(
-        r'CREATE\s+TABLE\s+[`"\']?(\w+)[`"\']?\s*\((.*?)\);',
-        sql_text, re.IGNORECASE | re.DOTALL
-    )
+    blocks = []
+    for m in re.finditer(
+        r'CREATE\s+TABLE\s+[`"\']?(\w+)[`"\']?\s*\(',
+        sql_text, re.IGNORECASE
+    ):
+        table_name = m.group(1)
+        start = m.end()  # position just after the opening paren
+        depth = 1
+        i = start
+        while i < len(sql_text) and depth > 0:
+            ch = sql_text[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        body = sql_text[start:i]
+        blocks.append((table_name, body))
     KEYWORDS = {
         'primary', 'key', 'foreign', 'references', 'unique', 'check',
         'constraint', 'index', 'not', 'null', 'default',
@@ -49,7 +65,26 @@ def parse_schema(sql_text: str) -> dict:
         table_low = table_name.lower()
         columns, pks, fks = [], [], []
 
-        for line in body.split('\n'):
+        # Split body on top-level commas (respecting paren depth)
+        parts = []
+        depth = 0
+        current = ''
+        for ch in body:
+            if ch == '(':
+                depth += 1
+                current += ch
+            elif ch == ')':
+                depth -= 1
+                current += ch
+            elif ch == ',' and depth == 0:
+                parts.append(current)
+                current = ''
+            else:
+                current += ch
+        if current.strip():
+            parts.append(current)
+
+        for line in parts:
             line = line.strip().rstrip(',').strip()
             if not line:
                 continue
@@ -73,7 +108,7 @@ def parse_schema(sql_text: str) -> dict:
                              for c in pk_match.group(1).split(',')])
             elif col_match:
                 cn, ct = col_match.group(1), col_match.group(2).lower()
-                if cn.lower() not in KEYWORDS and ct not in KEYWORDS:
+                if cn.lower() not in KEYWORDS:
                     columns.append((cn, ct))
 
         schema[table_low] = {
