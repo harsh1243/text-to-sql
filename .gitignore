@@ -3,3 +3,12 @@ __pycache__/
 .spider_data/
 tuning/tuning_results.json
 tuning/config_best.py
+
+# Downloaded LoRA adapters — fetched from the Drive link in
+# lora_weights/weights.txt, never committed.
+lora_zips/
+lora_adapter*/
+lora_adapter*.zip
+
+# Modal credentials
+.modal.toml
