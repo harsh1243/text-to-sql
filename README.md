@@ -19,6 +19,7 @@
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Operating Instructions](#operating-instructions)
+- [Hyperparameter Tuning](#hyperparameter-tuning)
 - [Datasets](#datasets)
 - [Results](#results)
 - [Known Bugs and Issues](#known-bugs-and-issues)
@@ -114,9 +115,12 @@ text-to-sql/
 ├── lora_weights/                                    ← Saved LoRA adapter checkpoints
 │   └── weights.txt                                  ← Instructions / links to download full weights
 │
-├── query_to_plan/                                   ← Dual Transformer SQL generation module
-│   ├── query_to_plan.py                             ← Core script: Question + Plan → SQL
+├── query_to_plan/                                   ← SQL → Plan converter (builds training labels)
+│   ├── query_to_plan.py                             ← Core script: SQL → execution plan (sqlglot AST walk)
 │   └── README.md                                    ← Module-level documentation
+│
+├── tuning/                                          ← Retriever hyperparameter tuning
+│   └── retriever_tuning.py                          ← Grid search: 0.6×table_F1 + 0.4×column_F1
 │
 └── retriver/                                        ← Multi-stage schema retriever module
     ├── __init__.py                                  ← Package initializer
@@ -153,7 +157,8 @@ cd text-to-sql
 ### Step 2: Install Dependencies
 
 ```bash
-pip install -r lora-training/requirements.txt
+pip install torch transformers==4.40.0 peft==0.10.0 accelerate==0.29.3 \
+            sentence-transformers rank-bm25 datasets evaluate numpy tqdm sqlglot
 ```
 
 The key dependencies are:
@@ -163,13 +168,18 @@ torch>=2.0.0
 transformers==4.40.0
 peft==0.10.0
 accelerate==0.29.3
-sentence-transformers>=2.6.0
-rank-bm25>=0.2.2
+sentence-transformers>=2.6.0     # retriever: bi-encoder + cross-encoder
+rank-bm25>=0.2.2                 # retriever: BM25 signal
+sqlglot>=20.0.0                  # query_to_plan: SQL AST parsing
 datasets>=2.18.0
 evaluate>=0.4.0
 numpy>=1.24.0
 tqdm>=4.65.0
 ```
+
+> The retriever and the tuning script need only `sentence-transformers` and
+> `rank-bm25` — no GPU, no Flan-T5. Install the rest only when you plan to
+> train or run the generation models.
 
 ### Step 3: Download Base Model
 
@@ -197,24 +207,38 @@ Download from the official Spider repository and place in `dataset/spider/`:
 All retriever hyperparameters are stored in `retriver/config.py`:
 
 ```python
-# ── Fusion Scoring Weights ──────────────────────────────────────
+# ── Fusion Scoring Weights (Stage 1) ────────────────────────────
 W_BIENCODER_BASE   = 0.60   # Weight for bi-encoder (dense) signal
 W_BM25_BASE        = 0.40   # Weight for BM25 (lexical) signal
+LEXICAL_SHIFT      = 0.10   # Shift toward BM25 on lexical questions
+SEMANTIC_SHIFT     = 0.10   # Shift toward bi-encoder on paraphrase questions
 
-# ── Threshold Selection ─────────────────────────────────────────
+# ── Threshold Selection (Stage 3) ───────────────────────────────
 DROP_RATIO         = 0.65   # Keep tables above top_score × ratio
 GAP_RATIO          = 0.25   # Gap guard: stop if gap > top_score × ratio
-MAX_TABLES         = 6      # Maximum tables to select
+MAX_TABLES         = 5      # Max tables from Stage 3 scoring (see note below)
 
-# ── Cross-Encoder Reranking ─────────────────────────────────────
+# ── Cross-Encoder Reranking (Stage 2) ───────────────────────────
 CE_WEIGHT          = 0.60   # Cross-encoder weight in combined score
 FUSION_WEIGHT      = 0.40   # Fusion score weight in combined score
 
-# ── Junction Table Handling ─────────────────────────────────────
+# ── Junction Table Handling (Stage 1) ───────────────────────────
 JUNCTION_PENALTY   = -0.15  # Penalty for junction tables not in question
+
+# ── Column Pruning (Stage 4.5) ──────────────────────────────────
+COL_CE_FLOOR       = 0.0    # Minimum cross-encoder score to keep a column
+COL_CE_GAP         = 2.0    # Adaptive cutoff: split at first gap > this
 ```
 
-> ⚠️ **Important:** These hyperparameter values were **not tuned empirically**. They were selected using LLM-suggested defaults. Hyperparameter tuning is planned as future work and may significantly improve retriever performance.
+> **Tuning:** These defaults were LLM-suggested, not empirically validated.
+> `tuning/retriever_tuning.py` grid-searches them against the gold schemas in
+> `train_final.json` — see [Hyperparameter Tuning](#hyperparameter-tuning).
+
+> **`MAX_TABLES` is not a hard cap on the output.** It limits how many tables
+> Stage 3 selects by *score*. Stage 3.5 (FK expansion) and Stage 4 (bridge BFS)
+> can add more on top, because a join path may legitimately need a table that
+> scored poorly on its own. Expect final table counts slightly above this value
+> on multi-join questions.
 
 ### Generation Model Configuration
 
@@ -364,17 +388,94 @@ If you want to train your own LoRA adapter, open `lora-training/text_to_plan.ipy
 ### Running Retriever Only
 
 ```python
-import sys
-sys.path.append("retriver/")
-from pipeline import MultiStageRetrieverPipeline
+from retriver import parse_schema, build_fk_graph, retrieve
 
-pipeline = MultiStageRetrieverPipeline(db_schema_path="path/to/schema.sql")
-result = pipeline.retrieve("How many heads of departments are older than 56?")
-print(result)
-# question: How many heads of departments are older than 56?
-# | schema: head ( head_ID [PK], age )
-# | foreign keys: none
+# Parse the schema ONCE per database
+schema   = parse_schema(open("path/to/schema.sql").read())
+fk_graph = build_fk_graph(schema)
+
+# Then retrieve per question
+result = retrieve("How many heads of departments are older than 56?",
+                  schema, fk_graph)
+print(result["model_input"])
+# question: How many heads of departments are older than 56? | schema: head ( head_ID [PK], age ) | foreign keys: none
 ```
+
+> The package directory is spelled `retriver` (no second `e`). Import it as
+> `from retriver import ...`, and run from the repository root so it is on
+> `sys.path`.
+
+Pass `verbose=True` to print stage-by-stage debug output, or
+`use_cross_encoder=False` to skip Stage 2 for speed.
+
+---
+
+### Hyperparameter Tuning
+
+`tuning/retriever_tuning.py` grid-searches the retriever's hyperparameters.
+It scores each config against the **gold pruned schema already embedded in the
+`input` field** of the processed training data — no extra labelling needed.
+
+**Scoring:**
+
+```
+table_f1   = F1 over the set of selected TABLES
+column_f1  = F1 over the set of selected COLUMNS
+combined   = 0.60 × table_f1  +  0.40 × column_f1
+```
+
+Column selection carries **40%** of the weight because it is the weakest
+component (Column F1 68.52 vs Table F1 75.58) and the one most worth improving.
+
+**Run it:**
+
+```bash
+# Quick sanity check — 8 configs, 150 questions, a few minutes on CPU
+python tuning/retriever_tuning.py \
+    --data   "path/to/train_final.json" \
+    --schemas "path/to/spider.zip" \
+    --limit 150 --quick
+
+# Full grid — 1,296 configs
+python tuning/retriever_tuning.py \
+    --data   "path/to/train_final.json" \
+    --schemas "path/to/spider.zip" \
+    --limit 400
+```
+
+| Flag | Meaning |
+|---|---|
+| `--data` | Processed training file (`train_final.json`) |
+| `--schemas` | `spider.zip`, or an extracted `tables.json` |
+| `--limit N` | Questions evaluated per config (0 = all 8,659). Default 200 |
+| `--quick` | 8-config grid instead of the full 1,296 |
+| `--no-cross-encoder` | Skip Stage 2 — much faster, lower accuracy |
+| `--top N` | How many ranked configs to print |
+
+**Outputs:**
+- `tuning/tuning_results.json` — every config, ranked by combined score
+- `tuning/config_best.py` — the winner, ready to copy into `retriver/config.py`
+
+The script prints the tuned best alongside the **shipped defaults** so you can
+see whether tuning actually helped.
+
+**Two implementation details worth knowing:**
+
+1. **Parameters are injected into `retriver.scoring` / `retriver.selection`, not
+   `retriver.config`.** Those modules use `from .config import DROP_RATIO`,
+   which copies the value at import time — writing to `config.DROP_RATIO`
+   afterwards would be a silent no-op and every config would score identically.
+   `verify_injection()` asserts this still works and fails loudly if a refactor
+   breaks it.
+
+2. **Neural scores are cached.** Bi-encoder embeddings and cross-encoder logits
+   don't depend on any tuned parameter, so they're computed once and replayed.
+   The first config is slow (it fills the cache); the rest are mostly
+   arithmetic.
+
+Schemas come from Spider's `tables.json` rather than the per-database
+`schema.sql` files, because `tables.json` covers all 146 databases in the
+training data while `spider.zip` ships `schema.sql` for only 133 of them.
 
 ---
 
@@ -439,9 +540,10 @@ def token_f1(pred, gold):
 - **Usage:** Primary benchmark for training and evaluation
 
 ### Synthetic Dataset (New)
-- **Location:** `dataset/synthetic/`
 - **Description:** Newly generated dataset with unseen schemas for zero-shot generalization testing
 - **Usage:** Tests true generalization to databases not seen during training
+- **Note:** Not committed to this repository — the synthetic splits live in the
+  `*(synthetic).ipynb` notebooks in `experiments/`, which generate them at runtime.
 
 ### Related Repositories and Resources
 
@@ -491,14 +593,26 @@ def token_f1(pred, gold):
 
 | # | Issue | Severity | Status |
 |---|---|---|---|
-| 1 | **Retriever hyperparameters not tuned** — Values (W_BIENCODER_BASE, DROP_RATIO, etc.) were LLM-suggested defaults, not empirically validated. May be suboptimal. | Medium | Open |
-| 2 | **Column F1 is low (68.52)** — Column retrieval is the weakest component. Tables with many similarly-named columns cause confusion. | Medium | Open |
+| 1 | **Retriever hyperparameters not tuned** — Values (W_BIENCODER_BASE, DROP_RATIO, etc.) were LLM-suggested defaults. Grid-search them with `tuning/retriever_tuning.py`. | Medium | In Progress |
+| 2 | **Column F1 is low (68.52)** — Column retrieval is the weakest component; tables with many similarly-named columns cause confusion. This is why column_F1 gets 40% weight in tuning. | Medium | Open |
 | 3 | **Error propagation in Dual Transformer** — If T1 (Planner) generates a wrong plan due to retrieval error, T2 (SQL Generator) will also produce wrong SQL. | Medium | Open |
 | 4 | **Context length limit (512 tokens)** — Very complex schemas with many tables and columns may get truncated, losing information. | Medium | Open |
 
 | 5 | **No support for multi-turn dialogue** — Each question is treated independently; context from previous queries in a session is not preserved. | Low | Open |
 | 6 | **Large base model size** — Flan-T5-XL (3B parameters) requires significant GPU memory. Running on CPU is very slow. | Low | By Design |
 | 7 | **Column Mention and Value Pattern signals removed** — Earlier design had 4 retriever signals; current version uses only 2 (BM25 + Bi-encoder). Removing these may have hurt column-level retrieval. | Low | Open |
+
+### Recently Fixed
+
+| # | Bug | Fix |
+|---|---|---|
+| 8 | **`retriver/scoring.py` did not import** — a bad indent at the top of `stage1_fusion`'s result loop raised `IndentationError`, so the whole package was unusable. | Rewrote the loop (the `# FIX Bug 3` comments that referenced it now actually describe the code). |
+| 9 | **`parse_schema` missed `CREATE TABLE IF NOT EXISTS`** — 8 of 148 Spider `schema.sql` files (incl. `department_management`, the first db in the training data) parsed to zero tables. | Regex now handles the `IF NOT EXISTS` clause. 148/148 schemas parse. |
+| 9b | **`parse_schema` only read one column per line** — the body was split on newlines, so a single-line `CREATE TABLE t (a int, b text);` yielded only column `a`. Spider's own files are one-per-line so this stayed hidden. | Split on top-level commas instead, keeping commas nested in `PRIMARY KEY (a, b)` and `DECIMAL(10,2)` intact. |
+| 10 | **COUNT queries dropped filter columns** — the "skip non-structural columns" rule ran before text/value matching, so *"How many heads of the departments are older than 56?"* returned `head ( head_ID [PK] )` instead of `head ( head_ID [PK], age )`. | Moved the COUNT-only gate after the text/value/superlative rules and added a comparative-filter rule (`older than 56` → keep numeric columns needed by WHERE). |
+| 11 | **Bridge BFS could emit tables missing from the schema** — a `FOREIGN KEY` can reference a table whose `CREATE TABLE` is absent, and BFS would select it; `formatter` then silently dropped it from the schema string. | Filter `final_tables` to tables present in the schema (pipeline). |
+| 12 | **Non-deterministic output ordering** — sets were returned as `list(set())`, so table/column order varied between runs. | `selection.py` and `pipeline.py` now sort (bridge BFS, FK expansion, column order). |
+| 13 | **`JUNCTION_PENALTY` was dead config** — imported but never applied; junction tables were scored the same as entity tables. | `stage1_fusion` now applies it unless the question names the junction table. |
 
 ---
 
@@ -553,6 +667,37 @@ dataset/
 **Fix:** This happens when no table scores above the DROP_RATIO threshold. Lower the threshold in `retriver/config.py`:
 ```python
 DROP_RATIO = 0.50   # Try a lower value (default is 0.65)
+```
+
+---
+
+### Schema Parses to Zero Tables
+
+**Error:** `parse_schema()` returns `{}` and the retriever selects nothing.
+
+**Fix:** Confirm the `.sql` file actually contains `CREATE TABLE` statements
+terminated with `;`. The parser handles `CREATE TABLE`, `CREATE TABLE IF NOT
+EXISTS`, and quoted/bracketed table names. Check quickly with:
+
+```python
+from retriver import parse_schema
+schema = parse_schema(open("schema.sql", encoding="utf-8", errors="replace").read())
+print(len(schema), "tables:", list(schema)[:5])
+```
+
+If this prints `0`, the file is likely a SQLite dump whose DDL uses a syntax
+variant the regex misses — open an issue with a sample.
+
+---
+
+### `ModuleNotFoundError: No module named 'retriver'`
+
+The package directory is spelled `retriver` (no second `e`). Run from the
+repository root, or add it to the path:
+
+```python
+import sys; sys.path.insert(0, "/path/to/text-to-sql")
+from retriver import parse_schema, build_fk_graph, retrieve
 ```
 
 ---

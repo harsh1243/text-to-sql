@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+.spider_data/
+tuning/tuning_results.json
+tuning/config_best.py

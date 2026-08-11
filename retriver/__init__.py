@@ -9,8 +9,8 @@ exactly as the training data expects:
 
 Quick start::
 
-    from retriever import retrieve
-    from retriever.parser import parse_schema, build_fk_graph
+    from retriver import retrieve
+    from retriver.parser import parse_schema, build_fk_graph
 
     schema   = parse_schema(open("schema.sql").read())
     fk_graph = build_fk_graph(schema)

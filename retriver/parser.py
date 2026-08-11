@@ -15,6 +15,34 @@ import re
 from collections import defaultdict
 
 
+def _split_definitions(body: str) -> list:
+    """
+    Split a CREATE TABLE body into individual column / constraint definitions.
+
+    Splits on TOP-LEVEL commas rather than newlines, so both of these parse:
+
+        CREATE TABLE t (a int, b text);            -- all on one line
+        CREATE TABLE t (\n  a int,\n  b text\n);   -- one per line
+
+    Commas nested inside parentheses are preserved, keeping
+    `PRIMARY KEY (a, b)` and `DECIMAL(10, 2)` in one piece.
+    """
+    parts, depth, current = [], 0, []
+    for ch in body:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+        if ch == ',' and depth <= 0:
+            parts.append(''.join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append(''.join(current))
+    return parts
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # parse_schema
 # ═════════════════════════════════════════════════════════════════════════════
@@ -37,7 +65,7 @@ def parse_schema(sql_text: str) -> dict:
     """
     schema = {}
     blocks = re.findall(
-        r'CREATE\s+TABLE\s+[`"\']?(\w+)[`"\']?\s*\((.*?)\);',
+        r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[\']?(\w+)[`"\]\']?\s*\((.*?)\)\s*;',
         sql_text, re.IGNORECASE | re.DOTALL
     )
     KEYWORDS = {
@@ -49,7 +77,7 @@ def parse_schema(sql_text: str) -> dict:
         table_low = table_name.lower()
         columns, pks, fks = [], [], []
 
-        for line in body.split('\n'):
+        for line in _split_definitions(body):
             line = line.strip().rstrip(',').strip()
             if not line:
                 continue

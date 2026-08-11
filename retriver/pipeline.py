@@ -5,8 +5,8 @@ Main `retrieve()` function that chains all 5 stages together.
 
 Usage::
 
-    from retriever import retrieve
-    from retriever.parser import parse_schema, build_fk_graph
+    from retriver import retrieve
+    from retriver.parser import parse_schema, build_fk_graph
 
     schema   = parse_schema(sql_text)   # once per DB
     fk_graph = build_fk_graph(schema)   # once per DB
@@ -83,6 +83,16 @@ def retrieve(
 
     # Stage 4: bridge BFS (iterative until stable)
     final_tables = find_bridge_tables(selected_expanded, fk_graph)
+
+    # Bridge BFS walks the FK graph, which may contain tables referenced by a
+    # FOREIGN KEY whose own CREATE TABLE is missing from the file.  Drop those
+    # so we never emit a table we cannot print columns for.
+    final_tables = [t for t in final_tables if t in schema]
+
+    # Restore schema declaration order — deterministic across runs and matches
+    # the ordering the training data uses.
+    table_order  = {t: i for i, t in enumerate(schema)}
+    final_tables = sorted(final_tables, key=lambda t: table_order.get(t, 1 << 30))
 
     # Stage 4.5: column pruning — primary tables get CE columns,
     #            supporting tables only get structural + text-matched

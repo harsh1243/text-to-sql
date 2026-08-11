@@ -87,7 +87,7 @@ The retriever uses a **5-stage pipeline** where each stage progressively narrows
 ## Project Structure
 
 ```
-retriever/
+retriver/
 ├── __init__.py      # Package entry — exports parse_schema, build_fk_graph, retrieve
 ├── config.py        # All hyperparameters & constants (single place to tune)
 ├── models.py        # Lazy-loaded bi-encoder & cross-encoder singletons
@@ -104,7 +104,7 @@ retriever/
 | `config.py` | — | All tunable hyperparameters (weights, thresholds, stopwords) |
 | `models.py` | — | Singleton model loading (bi-encoder, cross-encoder) |
 | `parser.py` | 0 | Parse `CREATE TABLE` SQL → structured schema dict + FK graph |
-| `scoring.py` | 1, 2 | 4-signal fusion scoring + cross-encoder reranking |
+| `scoring.py` | 1, 2 | 2-signal fusion scoring (bi-encoder + BM25) + cross-encoder reranking |
 | `selection.py` | 3, 3.5, 4, 4.5 | Adaptive threshold, FK expansion, bridge BFS, column pruning |
 | `formatter.py` | 5 | Format output to match training data format exactly |
 | `pipeline.py` | All | `retrieve()` — chains all stages together |
@@ -122,7 +122,7 @@ pip install sentence-transformers
 ### Usage
 
 ```python
-from retriever import parse_schema, build_fk_graph, retrieve
+from retriver import parse_schema, build_fk_graph, retrieve
 
 # 1. Parse schema ONCE per database
 with open("schema.sql") as f:

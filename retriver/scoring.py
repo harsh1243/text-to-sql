@@ -179,15 +179,23 @@ def stage1_fusion(question: str, schema: dict,
 
 
     results = []
-        for i, name in enumerate(table_names):
-            bi = bi_scores[i]
-            bm = bm25_norm[i]
-    
-            fusion = w_bi * bi + w_bm * bm
-            results.append((name, fusion, bi, bm))
-    
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:top_k_candidates]
+    for i, name in enumerate(table_names):
+        bi = bi_scores[i]
+        bm = bm25_norm[i]
+
+        fusion = w_bi * bi + w_bm * bm
+
+        # Junction tables are rarely what a question is *about* — Bridge BFS
+        # (Stage 4) discovers them structurally instead.  Penalise them here
+        # unless the question names them explicitly.
+        if classify_table_type(name, schema[name]) == "junction":
+            if name not in q_lower and name.replace('_', ' ') not in q_lower:
+                fusion += JUNCTION_PENALTY
+
+        results.append((name, fusion, bi, bm))
+
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[:top_k_candidates]
 
 
 # ═════════════════════════════════════════════════════════════════════════════

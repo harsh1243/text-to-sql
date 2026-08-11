@@ -114,7 +114,7 @@ def fk_neighbor_expansion(selected: list, question: str,
         if matched:
             expanded.add(nb)
 
-    return list(expanded)
+    return sorted(expanded)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -149,7 +149,7 @@ def find_bridge_tables(selected: list, fk_graph: dict, max_hops: int = 2) -> lis
     changed = True
     while changed:
         changed = False
-        tables  = list(selected_set)
+        tables  = sorted(selected_set)
         for i in range(len(tables)):
             for j in range(i + 1, len(tables)):
                 path = bfs_path(tables[i], tables[j])
@@ -159,7 +159,7 @@ def find_bridge_tables(selected: list, fk_graph: dict, max_hops: int = 2) -> lis
                             selected_set.add(b)
                             changed = True
 
-    return list(selected_set)
+    return sorted(selected_set)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -174,10 +174,11 @@ def stage_column_pruning(selected_tables: list, question: str,
 
     For each selected table, keep only columns that are:
       (a) structural  — PK or FK endpoint (always kept)
-      (b) COUNT-only  — skip non-structural entirely for COUNT(*) queries
       (c) text-match  — column's DISTINCTIVE parts fuzzy-match question tokens
       (d) value-match — proper nouns/years in question → categorical/int cols
       (e) superlative — "youngest/oldest/highest" → numeric cols for ORDER BY
+      (e2) comparative — "older than 56" → numeric cols needed by WHERE
+      (b) COUNT-only  — for "how many" queries, stop here (skip rule (f))
       (f) cross-encoder scored above adaptive threshold (PRIMARY tables only)
 
     Supporting tables (bridge/FK-expansion) only get (a)+(c)+(d).
@@ -187,12 +188,15 @@ def stage_column_pruning(selected_tables: list, question: str,
     q_lower  = question.lower()
     q_tokens = set(re.findall(r'\b\w+\b', q_lower))
 
+    NUMERIC_TYPES = ('int', 'integer', 'number', 'numeric', 'real', 'float',
+                     'double', 'decimal', 'bigint', 'smallint')
+
     # ── Detect SQL operation type ─────────────────────────────────────────────
     AGGR_WORDS_SET = {'average', 'avg', 'maximum', 'minimum', 'max', 'min',
                       'sum', 'total'}
     ORDER_SUPERLATIVES = {
         'oldest', 'youngest', 'tallest', 'shortest', 'heaviest', 'lightest',
-        'earliest', 'latest', 'newest', 'oldest', 'highest', 'lowest',
+        'earliest', 'latest', 'newest', 'highest', 'lowest',
         'largest', 'smallest', 'biggest', 'most', 'least', 'best', 'worst',
         'first', 'last', 'top', 'bottom', 'greatest', 'fewest'
     }
@@ -201,6 +205,16 @@ def stage_column_pruning(selected_tables: list, question: str,
                         for p in ['how many', 'count', 'number of', 'total number'])
     has_aggr      = bool(q_tokens & AGGR_WORDS_SET)
     has_order_sup = bool(q_tokens & ORDER_SUPERLATIVES)
+
+    # Comparative filter, e.g. "older than 56", "more than 3", "at least 2".
+    # These need the compared column even in a COUNT(*) query, where the
+    # column never appears in the SELECT list — only in the WHERE clause.
+    has_numeric_filter = bool(
+        re.search(r'\b(older|younger|newer|larger|smaller|greater|higher|lower|'
+                  r'longer|shorter|heavier|lighter|bigger|more|less|fewer|above|'
+                  r'below|over|under|exceeds?|exceeding|between)\b', q_lower)
+        and re.search(r'\b\d+(\.\d+)?\b', q_lower)
+    ) or bool(re.search(r'\b(at least|at most|no more than|no less than)\b', q_lower))
 
     # Proper nouns in question (capitalized words after prepositions)
     proper_nouns = set(re.findall(
@@ -254,7 +268,7 @@ def stage_column_pruning(selected_tables: list, question: str,
     def is_superlative_matched(col_orig: str, col_type: str) -> bool:
         if not has_order_sup:
             return False
-        if col_type not in ('int', 'integer', 'number', 'numeric', 'real', 'float'):
+        if col_type not in NUMERIC_TYPES:
             return False
         col_low  = col_orig.lower()
         distinct = _get_distinctive_parts(col_low)
@@ -292,10 +306,6 @@ def stage_column_pruning(selected_tables: list, question: str,
                 kept.append((col_orig, col_type))
                 continue
 
-            # (b) COUNT-only → skip all non-structural
-            if is_count_only and not has_aggr:
-                continue
-
             # (c) Text match on distinctive parts
             if is_text_matched(col_orig):
                 kept.append((col_orig, col_type))
@@ -309,6 +319,19 @@ def stage_column_pruning(selected_tables: list, question: str,
             # (e) Superlative → implicit ORDER BY numeric col
             if table in is_primary and is_superlative_matched(col_orig, col_type):
                 kept.append((col_orig, col_type))
+                continue
+
+            # (e2) Comparative filter → the compared numeric column is needed
+            #      for the WHERE clause even though COUNT(*) hides it.
+            if (has_numeric_filter and table in is_primary
+                    and col_type in NUMERIC_TYPES):
+                kept.append((col_orig, col_type))
+                continue
+
+            # (b) COUNT-only → skip the cross-encoder catch-all below.
+            #     Rules (c)–(e2) above still apply: a pure "how many X" query
+            #     needs no extra columns, but "how many X older than 56" does.
+            if is_count_only and not has_aggr:
                 continue
 
             # (f) Cross-encoder scoring — primary tables only
@@ -334,6 +357,9 @@ def stage_column_pruning(selected_tables: list, question: str,
                 if scores[idx] >= threshold:
                     kept.append((col_orig, col_type))
 
+        # Deterministic column order — preserve schema declaration order.
+        decl_order = {c.lower(): i for i, (c, _) in enumerate(info.get("columns", []))}
+        kept.sort(key=lambda kv: decl_order.get(kv[0].lower(), 1 << 30))
         pruned[table] = kept
 
     return pruned
