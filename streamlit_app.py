@@ -34,28 +34,40 @@ except ImportError:
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Dual pipeline endpoint — T1 plans, T2 writes SQL.
-ENDPOINT_URL = os.getenv(
-    "ENDPOINT_URL",
+PIPELINE_URL = os.getenv(
+    "PIPELINE_URL",
     "https://harsh1243--text-to-sql-pipeline.modal.run",
+)
+SINGLE_URL = os.getenv(
+    "SINGLE_URL",
+    "https://harsh1243--text-to-sql-single-web.modal.run",
 )
 
 # Proxy-auth headers. Defaults below are committed in-repo so a Streamlit
-# Cloud deploy works without configuring its own secrets UI. Override via
-# env vars if needed.
+# Cloud deploy works without configuring its own secrets UI.
 MODAL_KEY = os.getenv("MODAL_KEY", "wk-7OTNaNa9rCSRY1o1iUYjDp")
 MODAL_SECRET = os.getenv("MODAL_SECRET", "ws-wIg3aqnjVBTeQw0Tzwp9mN")
 
+MODELS = {
+    "Dual transformer (T1→T2)": PIPELINE_URL,
+    "Single transformer": SINGLE_URL,
+}
 
-def call_modal(payload: dict, key: str, secret: str, timeout: int = 600) -> dict:
-    """POST to the Modal endpoint with proxy auth. Follows redirects because
+# Generic question used to wake the containers. Picked so it works for any
+# schema — the retriever still does the full table/column selection.
+_WARM_QUESTION = "How many records are there in total?"
+
+
+def call_modal(url: str, payload: dict, key: str, secret: str,
+               timeout: int = 600) -> dict:
+    """POST to a Modal endpoint with proxy auth. Follows redirects because
     Modal returns 303 if a cold start outstays 150 s."""
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Modal-Key"] = key
     if secret:
         headers["Modal-Secret"] = secret
-    r = requests.post(ENDPOINT_URL, json=payload, headers=headers,
+    r = requests.post(url, json=payload, headers=headers,
                       allow_redirects=True, timeout=timeout)
     r.raise_for_status()
     return r.json()
@@ -97,6 +109,8 @@ if schema_file is not None:
                 fk_graph = build_fk_graph(schema)
             st.session_state["schema"] = schema
             st.session_state["fk_graph"] = fk_graph
+            # Reset warm state — schema changed, model needs to re-warm.
+            st.session_state["warmed_model"] = None
             n = len(schema)
             preview = ", ".join(list(schema.keys())[:5])
             extra = f" (+{n - 5} more)" if n > 5 else ""
@@ -106,21 +120,65 @@ if schema_file is not None:
             st.error(f"Failed to parse schema: {e}")
 
 
-# 2. Question + Generate SQL
-question = st.text_input("Question",
-                          placeholder="e.g. What are the names of authors who have written papers in the 'Database' domain?",
-                          disabled=not schema_ready)
-
+# 2. Pick a model
 creds_ready = bool(key and secret)
-generate = st.button("Generate SQL",
-                     type="primary",
-                     disabled=not schema_ready or not creds_ready)
+model_label = st.radio("Model", list(MODELS.keys()), horizontal=True,
+                       disabled=not schema_ready)
+model_url = MODELS[model_label]
+
+warm_status = st.session_state.get("warmed_model") == model_label
+
+
+# 3. Warm up
+warm_clicked = st.button(
+    "Warm up GPU",
+    disabled=not schema_ready or not creds_ready or warm_status,
+)
+
+if warm_clicked:
+    with st.spinner(f"Warming up {model_label} — cold start can take 30–90 s…"):
+        try:
+            retriever_out = retrieve(
+                _WARM_QUESTION,
+                st.session_state["schema"],
+                st.session_state["fk_graph"],
+            )
+            call_modal(
+                model_url,
+                {"input": retriever_out["model_input"]},
+                key, secret,
+            )
+            st.session_state["warmed_model"] = model_label
+            st.session_state["warmed_url"] = model_url
+        except Exception as e:
+            st.error(f"Warm-up failed: {e}")
+
+# Live status line — only one of these shows at a time.
+if st.session_state.get("warmed_model") == model_label:
+    st.write(f"Status: **{model_label} is warm**.")
+elif st.session_state.get("warmed_model"):
+    st.write(f"Status: currently warm = **{st.session_state['warmed_model']}**. "
+             f"Click **Warm up GPU** again to switch.")
+
+
+# 4. Question + Generate SQL
+question = st.text_input(
+    "Question",
+    placeholder="Type a question, then click Generate SQL.",
+    disabled=not warm_status,
+)
+
+generate = st.button(
+    "Generate SQL",
+    type="primary",
+    disabled=not warm_status or not creds_ready,
+)
 
 if generate:
     if not question.strip():
         st.warning("Type a question first.")
     else:
-        with st.spinner("Running retriever + model — first request may take 30–90 s for cold start."):
+        with st.spinner("Running retriever + model…"):
             try:
                 retriever_out = retrieve(
                     question,
@@ -128,7 +186,11 @@ if generate:
                     st.session_state["fk_graph"],
                 )
                 model_input = retriever_out["model_input"]
-                data = call_modal({"input": model_input}, key, secret)
+                data = call_modal(
+                    st.session_state["warmed_url"],
+                    {"input": model_input},
+                    key, secret,
+                )
             except requests.HTTPError as e:
                 st.error(f"Modal returned {e.response.status_code}. "
                          f"Body: {e.response.text[:200]}")
