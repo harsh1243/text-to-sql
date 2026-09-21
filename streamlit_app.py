@@ -226,48 +226,29 @@ model = st.radio(
 
 st.caption(MODELS[model]["blurb"])
 
-# A canned question for the warm-up so the user doesn't have to type one
-# just to wake the containers. Edit it to test a specific query shape
-# against your schema; the retriever still does the table/column selection
-# based on whatever question is in this box.
-st.session_state.setdefault(
-    "warm_question",
-    "Give me an overview of the data — what tables exist and how many rows in each?",
-)
-warm_question = st.text_input(
-    "Sample warm-up question",
-    value=st.session_state["warm_question"],
-    help="Sent through your schema via the 5-stage retriever → model. "
-         "Edit to exercise a specific query shape (e.g. JOIN, GROUP BY, "
-         "subquery).",
-    disabled=not schema_ready,
-)
-st.session_state["warm_question"] = warm_question
+# Generic question used to wake the containers. Picked so it works for any
+# schema — the retriever still does the full table/column selection.
+_WARM_QUESTION = "How many records are there in total?"
 
 col_warm, col_status = st.columns([1, 3])
 with col_warm:
     warm_clicked = st.button(
         "Warm up GPUs",
         disabled=not schema_ready or not creds_ready,
-        help="Sends the question above so the first real query is fast. "
-             "Cold start can take 30–90 s.",
     )
 
 if warm_clicked:
     with st.spinner(f"Warming up {model} — cold start can take 30–90 s …"):
         try:
-            secs, warm_data, warm_q = warm_up(
+            secs, _, _ = warm_up(
                 model,
                 st.session_state["schema"],
                 st.session_state["fk_graph"],
-                warm_question,
+                _WARM_QUESTION,
                 key, secret,
             )
             st.session_state["warmed_model"] = model
             st.session_state["warm_seconds"] = secs
-            st.session_state["last_warm_data"] = warm_data
-            st.session_state["last_warm_question"] = warm_q
-            # Toast = top-right corner, very visible, auto-dismisses.
             st.toast(
                 f"✅ {model} is warm and ready "
                 f"(cold start took {secs:.1f}s — next call will be faster)",
@@ -282,31 +263,12 @@ if st.session_state["warmed_model"]:
         warm_model = st.session_state["warmed_model"]
         secs = st.session_state["warm_seconds"]
         if warm_model == model:
-            st.success(
-                f"**Status: warm.** {warm_model} took {secs:.1f}s on the "
-                f"warm-up call — your next question will be faster."
-            )
+            st.success(f"**Status: warm.** {warm_model} is ready.")
         else:
             st.warning(
-                f"⚠ Currently warm: **{warm_model}** ({secs:.1f}s ago). "
-                f"You selected **{model}** — click **Warm up GPUs** again "
-                f"to switch."
+                f"⚠ Currently warm: **{warm_model}**. "
+                f"Click **Warm up GPUs** again to switch to **{model}**."
             )
-
-    # Show what the model produced during warm-up as proof it's live.
-    if "last_warm_data" in st.session_state:
-        d = st.session_state["last_warm_data"]
-        st.caption(
-            f"Warm-up ran your uploaded schema through the retriever + "
-            f"model with the question: *“{st.session_state.get('last_warm_question', '')}”*"
-        )
-        cp, cs = st.columns(2)
-        with cp:
-            st.caption("Warm-up output — Plan")
-            st.code(d.get("plan", ""), language="text")
-        with cs:
-            st.caption("Warm-up output — SQL")
-            st.code(d.get("sql", ""), language="sql")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
