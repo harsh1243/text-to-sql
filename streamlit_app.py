@@ -85,29 +85,28 @@ def call_modal(url: str, payload: dict, key: str, secret: str,
     return r.json()
 
 
-def warm_up(model_label: str, schema: dict, fk_graph, key: str,
-            secret: str) -> tuple[float, dict, str]:
+def warm_up(model_label: str, schema: dict, fk_graph, question: str,
+            key: str, secret: str) -> tuple[float, dict, str]:
     """Run a sample question through the user's *uploaded* schema end-to-end
-    (retriever → model) so the warm-up output is meaningful to them, not
-    a hardcoded singer-table sanity check.
+    so the warm-up output is meaningful to them.
 
-    For the dual pipeline this single call wakes both Planner and Plan2Sql
-    pools because ``pipeline`` calls each via ``.remote()`` internally.
+    Flow: question -> retriver.retrieve() (5-stage multi-signal schema
+    selection) -> model_input -> Modal endpoint -> plan + SQL. This is the
+    exact pipeline a real question goes through; warm-up just uses a
+    canned question so we don't depend on the user typing one.
+
+    For the dual pipeline this single call wakes both Planner and
+    Plan2Sql pools because ``pipeline`` calls each via ``.remote()``
+    internally.
 
     Returns (elapsed_seconds, response_json, question_used).
     """
     cfg = MODELS[model_label]
-    # Generic question that works for any schema: pick the first table
-    # so the model has something concrete to emit.
-    first_table = next(iter(schema.keys())) if schema else "records"
-    sample_question = f"How many rows are in {first_table}?"
-
-    retriever_out = retrieve(sample_question, schema, fk_graph)
+    retriever_out = retrieve(question, schema, fk_graph)
     model_input = retriever_out["model_input"]
-
     t0 = time.time()
     data = call_modal(cfg["url"], {"input": model_input}, key, secret)
-    return time.time() - t0, data, sample_question
+    return time.time() - t0, data, question
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,12 +226,30 @@ model = st.radio(
 
 st.caption(MODELS[model]["blurb"])
 
+# A canned question for the warm-up so the user doesn't have to type one
+# just to wake the containers. Edit it to test a specific query shape
+# against your schema; the retriever still does the table/column selection
+# based on whatever question is in this box.
+st.session_state.setdefault(
+    "warm_question",
+    "Give me an overview of the data — what tables exist and how many rows in each?",
+)
+warm_question = st.text_input(
+    "Sample warm-up question",
+    value=st.session_state["warm_question"],
+    help="Sent through your schema via the 5-stage retriever → model. "
+         "Edit to exercise a specific query shape (e.g. JOIN, GROUP BY, "
+         "subquery).",
+    disabled=not schema_ready,
+)
+st.session_state["warm_question"] = warm_question
+
 col_warm, col_status = st.columns([1, 3])
 with col_warm:
     warm_clicked = st.button(
         "Warm up GPUs",
         disabled=not schema_ready or not creds_ready,
-        help="Sends a sample question so the first real query is fast. "
+        help="Sends the question above so the first real query is fast. "
              "Cold start can take 30–90 s.",
     )
 
@@ -243,6 +260,7 @@ if warm_clicked:
                 model,
                 st.session_state["schema"],
                 st.session_state["fk_graph"],
+                warm_question,
                 key, secret,
             )
             st.session_state["warmed_model"] = model
