@@ -15,6 +15,23 @@ The schema retriever is **not** deployed. It runs locally for free and builds
 the `input` string these endpoints consume — GPU time is spent only on
 generation.
 
+## Live endpoints
+
+Deployed to workspace `harsh1243`, app `text-to-sql`:
+
+| Endpoint | URL |
+|---|---|
+| Dual pipeline (T1→T2) | `https://harsh1243--text-to-sql-pipeline.modal.run` |
+| T1 planner | `https://harsh1243--text-to-sql-planner-web.modal.run` |
+| T2 plan→SQL | `https://harsh1243--text-to-sql-plan2sql-web.modal.run` |
+| Single transformer | `https://harsh1243--text-to-sql-single-web.modal.run` |
+
+Dashboard: https://modal.com/apps/harsh1243/main/deployed/text-to-sql
+
+All four return **HTTP 401** without credentials — verified by probing each one.
+Note that `modal deploy` only prints the 🔑 badge next to `pipeline`; the three
+class endpoints are equally protected despite the missing icon.
+
 ## Cost
 
 L40S is **$0.000542/sec (~$1.95/hr)**. Your $30 of credits is roughly
@@ -24,9 +41,9 @@ Billing is per-container, and each of the three classes loads its own copy of
 the 11 GB base model. A cold `pipeline` call therefore pays two base-model
 loads — the tradeoff for keeping the adapters in separate pools.
 
-`SCALEDOWN_WINDOW = 120` in `modal_app.py` means a container lingers 2 minutes
-after your last request. That costs ~$0.065 per burst but makes follow-up calls
-skip the cold start entirely. Lower it to `20` to minimise idle spend if you
+`SCALEDOWN_WINDOW = 900` in `modal_app.py` means a container lingers 15 minutes
+after your last request. That costs ~$0.49 per burst but makes follow-up calls
+skip the cold start entirely. Lower it to `120` to minimise idle spend if you
 only ever send one request at a time.
 
 Nothing runs, and nothing is billed, until a request arrives.
@@ -103,15 +120,34 @@ python deploy/client.py --question "..." --schema-file ... --model single
 python deploy/client.py --input "question: How many singers do we have? | schema: singer ( Singer_ID [PK] ) | foreign keys: none"
 ```
 
-### curl
+### modal curl — does NOT work with these endpoints
+
+`modal curl` is documented as sending authenticated requests without proxy
+headers, but it was tested against this deployment and returns:
+
+```
+modal-http: missing credentials for proxy authorization
+```
+
+`requires_proxy_auth=True` is enforced at Modal's edge and is not satisfied by
+your workspace API credentials. Use `client.py` (RPC) or a proxy-auth token.
+
+### plain curl — needs a proxy-auth token
+
+Create one at **modal.com → Settings → Proxy Auth Tokens**. The CLI cannot mint
+these; the dashboard is the only route. You get a Token ID (`wk-...`) and a
+Token Secret (`ws-...`).
 
 ```bash
+export MODAL_KEY=wk-xxxxxxxx
+export MODAL_SECRET=ws-xxxxxxxx
+
 curl -L -X POST \
   -H "Modal-Key: $MODAL_KEY" \
   -H "Modal-Secret: $MODAL_SECRET" \
   -H 'Content-Type: application/json' \
   -d '{"input": "question: How many singers do we have? | schema: singer ( Singer_ID [PK] ) | foreign keys: none"}' \
-  https://<workspace>--text-to-sql-pipeline.modal.run
+  https://harsh1243--text-to-sql-pipeline.modal.run
 ```
 
 **`-L` is required.** Modal returns a 303 redirect if a request outstays 150

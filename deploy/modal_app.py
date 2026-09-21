@@ -65,7 +65,7 @@ BASE_DIR     = f"{MODEL_DIR}/flan-t5-xl"
 ADAPTER_ROOT = f"{MODEL_DIR}/adapters"
 
 GPU  = "L40S"                 # $0.000542/sec ~= $1.95/hr
-SCALEDOWN_WINDOW = 120        # idle seconds before scale-to-zero
+SCALEDOWN_WINDOW = 900        # idle seconds before scale-to-zero (15 min)
 FN_TIMEOUT       = 900        # generous: covers an 11 GB cold load + beams
 
 # Adapter subdirectory names inside ADAPTER_ROOT.  upload_adapters.py writes
@@ -105,8 +105,11 @@ def download_base():
     snapshot_download(
         repo_id=BASE_REPO,
         local_dir=BASE_DIR,
-        # TensorFlow / Flax / Rust weights are dead weight for PyTorch.
-        ignore_patterns=["*.h5", "*.msgpack", "*.ot"],
+        # Keep only the safetensors shards.  The repo also ships TensorFlow,
+        # Flax and legacy pytorch_model-*.bin copies of the same weights —
+        # downloading those would roughly double an already 11 GB pull for
+        # files transformers will never open.
+        ignore_patterns=["*.h5", "*.msgpack", "*.ot", "pytorch_model*.bin"],
     )
     volume.commit()
     print(f"base model ready at {BASE_DIR}")
