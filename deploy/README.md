@@ -32,6 +32,31 @@ All four return **HTTP 401** without credentials — verified by probing each on
 Note that `modal deploy` only prints the 🔑 badge next to `pipeline`; the three
 class endpoints are equally protected despite the missing icon.
 
+## Web UI (Streamlit)
+
+`streamlit_app.py` at the repo root is a thin Streamlit front-end that calls
+the endpoints above. Flow: **upload schema → warm GPUs → ask questions**. Each
+question is independent — nothing is stored between turns.
+
+```bash
+pip install streamlit requests sentence-transformers rank-bm25
+streamlit run streamlit_app.py
+```
+
+Or deploy it on Modal (so the UI is reachable without running anything
+locally):
+
+```bash
+# One-time: create the secret in the Modal dashboard.
+#   Secrets → New → name "modal-proxy-auth"
+#   keys MODAL_KEY (wk-…) and MODAL_SECRET (ws-…)
+modal deploy deploy/modal_streamlit.py
+```
+
+Modal prints a URL like `https://harsh1243--text-to-sql-ui.modal.run`. The
+deployed UI reads its proxy-auth token from the Modal Secret, so users of the
+deployed UI don't need to paste credentials themselves.
+
 ## Cost
 
 L40S is **$0.000542/sec (~$1.95/hr)**. Your $30 of credits is roughly
