@@ -126,13 +126,17 @@ model_label = st.radio("Model", list(MODELS.keys()), horizontal=True,
                        disabled=not schema_ready)
 model_url = MODELS[model_label]
 
-warm_status = st.session_state.get("warmed_model") == model_label
+# `is_warm` is read fresh on every render — never cached at the top of the
+# script, because that snapshot is taken BEFORE the warmup click handler
+# runs and would freeze `disabled=` to the wrong value for that render.
+def is_warm() -> bool:
+    return st.session_state.get("warmed_model") == model_label
 
 
 # 3. Warm up
 warm_clicked = st.button(
     "Warm up GPU",
-    disabled=not schema_ready or not creds_ready or warm_status,
+    disabled=not schema_ready or not creds_ready or is_warm(),
 )
 
 if warm_clicked:
@@ -154,7 +158,7 @@ if warm_clicked:
             st.error(f"Warm-up failed: {e}")
 
 # Live status line — only one of these shows at a time.
-if st.session_state.get("warmed_model") == model_label:
+if is_warm():
     st.write(f"Status: **{model_label} is warm**.")
 elif st.session_state.get("warmed_model"):
     st.write(f"Status: currently warm = **{st.session_state['warmed_model']}**. "
@@ -165,13 +169,13 @@ elif st.session_state.get("warmed_model"):
 question = st.text_input(
     "Question",
     placeholder="Type a question, then click Generate SQL.",
-    disabled=not warm_status,
+    disabled=not is_warm(),
 )
 
 generate = st.button(
     "Generate SQL",
     type="primary",
-    disabled=not warm_status or not creds_ready,
+    disabled=not is_warm() or not creds_ready,
 )
 
 if generate:
