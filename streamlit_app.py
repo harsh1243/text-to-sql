@@ -235,7 +235,14 @@ if warm_clicked:
             st.session_state["warmed_model"] = model
             st.session_state["warm_seconds"] = secs
             st.session_state["last_warm_data"] = warm_data
+            # Toast = top-right corner, very visible, auto-dismisses.
+            st.toast(
+                f"✅ {model} is warm and ready "
+                f"(cold start took {secs:.1f}s — next call will be faster)",
+                icon="🟢",
+            )
         except Exception as e:
+            st.toast(f"❌ Warm-up failed: {e}", icon="🔴")
             st.error(f"Warm-up failed: {e}")
 
 if st.session_state["warmed_model"]:
@@ -243,27 +250,27 @@ if st.session_state["warmed_model"]:
         warm_model = st.session_state["warmed_model"]
         secs = st.session_state["warm_seconds"]
         if warm_model == model:
-            st.info(
-                f"**{warm_model}** is warm — last call took {secs:.1f}s. "
-                f"Follow-up questions will be faster."
+            st.success(
+                f"**Status: warm.** {warm_model} took {secs:.1f}s on the "
+                f"warm-up call — your next question will be faster."
             )
         else:
             st.warning(
-                f"Warmed **{warm_model}** earlier ({secs:.1f}s). "
-                f"Click **Warm up GPUs** again to warm **{model}**."
+                f"⚠ Currently warm: **{warm_model}** ({secs:.1f}s ago). "
+                f"You selected **{model}** — click **Warm up GPUs** again "
+                f"to switch."
             )
 
-    # Optional: surface the warm-up's own output as a sanity check.
-    if "last_warm_data" in st.session_state and warm_clicked:
-        with st.expander("Warm-up sample output"):
-            d = st.session_state["last_warm_data"]
-            cp, cs = st.columns(2)
-            with cp:
-                st.caption("Plan")
-                st.code(d.get("plan", ""), language="text")
-            with cs:
-                st.caption("SQL")
-                st.code(d.get("sql", ""), language="sql")
+    # Show what the model produced during warm-up as proof it's live.
+    if "last_warm_data" in st.session_state:
+        d = st.session_state["last_warm_data"]
+        cp, cs = st.columns(2)
+        with cp:
+            st.caption("Warm-up output — Plan")
+            st.code(d.get("plan", ""), language="text")
+        with cs:
+            st.caption("Warm-up output — SQL")
+            st.code(d.get("sql", ""), language="sql")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
