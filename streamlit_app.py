@@ -291,63 +291,72 @@ question_file = st.file_uploader(
 )
 
 question = ""
-if question_text.strip():
+if question_text and question_text.strip():
     question = question_text.strip()
 elif question_file is not None:
     question = question_file.read().decode("utf-8", errors="replace").strip()
 
+# Keep the button always enabled (subject to schema + creds). Validate the
+# question on click instead of disabling the button — Streamlit text inputs
+# only commit on Enter/blur, which makes pre-commit disabled states feel
+# unresponsive.
 generate = st.button(
     "Generate SQL",
     type="primary",
-    disabled=not schema_ready or not question or not creds_ready,
+    disabled=not schema_ready or not creds_ready,
     help="Run the retriever + model on your question.",
 )
+if generate and not question:
+    st.warning("Type a question or upload a file first.")
 
 if generate:
-    with st.spinner("Retrieving schema → calling model …"):
-        try:
-            t0 = time.time()
-            retriever_out = retrieve(
-                question,
-                st.session_state["schema"],
-                st.session_state["fk_graph"],
+    if not question:
+        st.warning("Type a question or upload a file first.")
+    else:
+        with st.spinner("Retrieving schema → calling model …"):
+            try:
+                t0 = time.time()
+                retriever_out = retrieve(
+                    question,
+                    st.session_state["schema"],
+                    st.session_state["fk_graph"],
+                )
+                model_input = retriever_out["model_input"]
+                retrieval_ms = (time.time() - t0) * 1000
+
+                cfg = MODELS[model]
+                data = call_modal(cfg["url"], {"input": model_input}, key, secret)
+                total_ms = (time.time() - t0) * 1000
+            except requests.HTTPError as e:
+                st.error(
+                    f"Modal returned {e.response.status_code}. "
+                    f"Check that Modal-Key/Secret are correct and the endpoint "
+                    f"exists. Body: {e.response.text[:200]}"
+                )
+                data = None
+            except Exception as e:
+                st.error(f"Failed: {e}")
+                data = None
+
+        if data:
+            plan = (data.get("plan") or "").strip()
+            sql = (data.get("sql") or "").strip()
+            model_secs = (total_ms - retrieval_ms) / 1000
+            st.success(
+                f"Done in {total_ms / 1000:.1f}s "
+                f"(retriever {retrieval_ms / 1000:.1f}s, model {model_secs:.1f}s)"
             )
-            model_input = retriever_out["model_input"]
-            retrieval_ms = (time.time() - t0) * 1000
 
-            cfg = MODELS[model]
-            data = call_modal(cfg["url"], {"input": model_input}, key, secret)
-            total_ms = (time.time() - t0) * 1000
-        except requests.HTTPError as e:
-            st.error(
-                f"Modal returned {e.response.status_code}. "
-                f"Check that Modal-Key/Secret are correct and the endpoint "
-                f"exists. Body: {e.response.text[:200]}"
-            )
-            data = None
-        except Exception as e:
-            st.error(f"Failed: {e}")
-            data = None
+            col_plan, col_sql = st.columns(2)
+            with col_plan:
+                st.subheader("Execution plan")
+                st.code(plan or "(no plan returned)", language="text")
+            with col_sql:
+                st.subheader("SQL")
+                st.code(sql or "(no SQL returned)", language="sql")
 
-    if data:
-        plan = (data.get("plan") or "").strip()
-        sql = (data.get("sql") or "").strip()
-        model_secs = (total_ms - retrieval_ms) / 1000
-        st.success(
-            f"Done in {total_ms / 1000:.1f}s "
-            f"(retriever {retrieval_ms / 1000:.1f}s, model {model_secs:.1f}s)"
-        )
-
-        col_plan, col_sql = st.columns(2)
-        with col_plan:
-            st.subheader("Execution plan")
-            st.code(plan or "(no plan returned)", language="text")
-        with col_sql:
-            st.subheader("SQL")
-            st.code(sql or "(no SQL returned)", language="sql")
-
-        with st.expander("What the retriever sent to the model"):
-            st.code(model_input, language="text")
+            with st.expander("What the retriever sent to the model"):
+                st.code(model_input, language="text")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
