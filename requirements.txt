@@ -1,0 +1,11 @@
+# Pinned for Streamlit Community Cloud (and reproducible local installs).
+# The Modal deployment uses its own image and ignores this file.
+streamlit==1.36.0
+requests==2.32.3
+
+# Retriever runs inside the Streamlit process, so these are needed wherever
+# the UI runs. sentence-transformers pulls torch transitively, but pinning
+# the same version as deploy/modal_app.py keeps behaviour identical.
+sentence-transformers==2.6.1
+rank-bm25==0.2.2
+torch==2.3.1
