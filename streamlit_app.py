@@ -31,308 +31,107 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Config — override via env vars (Modal secrets) or the sidebar
+# Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-PIPELINE_URL = os.getenv(
-    "PIPELINE_URL",
+# Dual pipeline endpoint — T1 plans, T2 writes SQL.
+ENDPOINT_URL = os.getenv(
+    "ENDPOINT_URL",
     "https://harsh1243--text-to-sql-pipeline.modal.run",
 )
-SINGLE_URL = os.getenv(
-    "SINGLE_URL",
-    "https://harsh1243--text-to-sql-single-web.modal.run",
-)
 
-# Proxy-auth headers. When deployed to Modal, set these as a Modal Secret
-# named ``modal-proxy-auth`` with keys MODAL_KEY / MODAL_SECRET.
-# Defaults below are committed in-repo so a Streamlit Cloud deploy works
-# without configuring its own secrets UI. Override via env vars if needed.
+# Proxy-auth headers. Defaults below are committed in-repo so a Streamlit
+# Cloud deploy works without configuring its own secrets UI. Override via
+# env vars if needed.
 MODAL_KEY = os.getenv("MODAL_KEY", "wk-7OTNaNa9rCSRY1o1iUYjDp")
 MODAL_SECRET = os.getenv("MODAL_SECRET", "ws-wIg3aqnjVBTeQw0Tzwp9mN")
 
-# (Warm-up now builds its question from the user's schema inside warm_up().)
 
-MODELS = {
-    "Dual transformer (T1→T2)": {
-        "url": PIPELINE_URL,
-        "kind": "pipeline",
-        "blurb": "T1 plans, T2 writes SQL — best quality, ~30-50% slower.",
-    },
-    "Single transformer": {
-        "url": SINGLE_URL,
-        "kind": "single",
-        "blurb": "One model emits plan and SQL — faster, slightly lower SQL F1.",
-    },
-}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def call_modal(url: str, payload: dict, key: str, secret: str,
-               timeout: int = 600) -> dict:
-    """POST to a Modal endpoint with proxy auth. Follows redirects because
+def call_modal(payload: dict, key: str, secret: str, timeout: int = 600) -> dict:
+    """POST to the Modal endpoint with proxy auth. Follows redirects because
     Modal returns 303 if a cold start outstays 150 s."""
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Modal-Key"] = key
     if secret:
         headers["Modal-Secret"] = secret
-    r = requests.post(url, json=payload, headers=headers,
+    r = requests.post(ENDPOINT_URL, json=payload, headers=headers,
                       allow_redirects=True, timeout=timeout)
     r.raise_for_status()
     return r.json()
 
 
-def warm_up(model_label: str, schema: dict, fk_graph, question: str,
-            key: str, secret: str) -> tuple[float, dict, str]:
-    """Run a sample question through the user's *uploaded* schema end-to-end
-    so the warm-up output is meaningful to them.
-
-    Flow: question -> retriver.retrieve() (5-stage multi-signal schema
-    selection) -> model_input -> Modal endpoint -> plan + SQL. This is the
-    exact pipeline a real question goes through; warm-up just uses a
-    canned question so we don't depend on the user typing one.
-
-    For the dual pipeline this single call wakes both Planner and
-    Plan2Sql pools because ``pipeline`` calls each via ``.remote()``
-    internally.
-
-    Returns (elapsed_seconds, response_json, question_used).
-    """
-    cfg = MODELS[model_label]
-    retriever_out = retrieve(question, schema, fk_graph)
-    model_input = retriever_out["model_input"]
-    t0 = time.time()
-    data = call_modal(cfg["url"], {"input": model_input}, key, secret)
-    return time.time() - t0, data, question
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Page setup
+# Page
 # ─────────────────────────────────────────────────────────────────────────────
 
-st.set_page_config(
-    page_title="Text-to-SQL",
-    page_icon="🗃️",
-    layout="wide",
-)
-st.title("Schema-Aware Text-to-SQL")
-st.caption(
-    "Upload a schema → warm the GPUs → ask questions in natural language. "
-    "Each question is independent — nothing is stored between turns."
-)
+st.set_page_config(page_title="Text-to-SQL", page_icon="🗃️", layout="wide")
+st.title("Text-to-SQL")
 
-# Session-state defaults — survive reruns, cleared on schema reload.
-st.session_state.setdefault("schema", None)
-st.session_state.setdefault("fk_graph", None)
-st.session_state.setdefault("schema_tables", [])
-st.session_state.setdefault("warmed_model", None)
-st.session_state.setdefault("warm_seconds", None)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Sidebar — Modal proxy auth + endpoint URLs
-# ─────────────────────────────────────────────────────────────────────────────
-
+# Modal credentials — sidebar
 with st.sidebar:
-    st.header("Modal credentials")
-    st.caption(
-        "Create at modal.com → Settings → Proxy Auth Tokens. "
-        "On a deployed Modal UI these come from the `modal-proxy-auth` secret."
-    )
-    key = st.text_input(
-        "Modal-Key (wk-…)",
-        value=MODAL_KEY or st.session_state.get("modal_key", ""),
-        type="password",
-    )
-    secret = st.text_input(
-        "Modal-Secret (ws-…)",
-        value=MODAL_SECRET or st.session_state.get("modal_secret", ""),
-        type="password",
-    )
+    key = st.text_input("Modal-Key (wk-…)",
+                        value=MODAL_KEY or st.session_state.get("modal_key", ""),
+                        type="password")
+    secret = st.text_input("Modal-Secret (ws-…)",
+                          value=MODAL_SECRET or st.session_state.get("modal_secret", ""),
+                          type="password")
     if key:
         st.session_state["modal_key"] = key
     if secret:
         st.session_state["modal_secret"] = secret
 
-    with st.expander("Endpoint URLs"):
-        st.code(PIPELINE_URL, language="text")
-        st.code(SINGLE_URL, language="text")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
 # 1. Schema upload
-# ─────────────────────────────────────────────────────────────────────────────
-
-st.header("1. Upload schema")
-schema_file = st.file_uploader(
-    "schema.sql",
-    type=["sql"],
-    key="schema_file",
-    help="The CREATE TABLE statements for the database you want to query.",
-)
-
+schema_file = st.file_uploader("Upload schema.sql", type=["sql"])
+schema_ready = False
 if schema_file is not None:
     text = schema_file.read().decode("utf-8", errors="replace")
     if retrieve is None:
-        st.error(
-            "Retriever not importable. Run from the repo root and install "
-            "`sentence-transformers rank-bm25`."
-        )
+        st.error("Retriever not importable. Run from the repo root and install "
+                 "`sentence-transformers rank-bm25`.")
     else:
         try:
-            with st.spinner(
-                "Parsing schema and loading retriever models (first run "
-                "downloads ~80 MB) …"
-            ):
+            with st.spinner("Parsing schema…"):
                 schema = parse_schema(text)
                 fk_graph = build_fk_graph(schema)
             st.session_state["schema"] = schema
             st.session_state["fk_graph"] = fk_graph
-            st.session_state["schema_tables"] = list(schema.keys())
-            # Reset warm state — different schema may need different tables
-            # selected, but more importantly we want a clean "ready?" state.
-            st.session_state["warmed_model"] = None
-            st.session_state["warm_seconds"] = None
-
             n = len(schema)
             preview = ", ".join(list(schema.keys())[:5])
             extra = f" (+{n - 5} more)" if n > 5 else ""
             st.success(f"Parsed {n} tables: {preview}{extra}")
+            schema_ready = True
         except Exception as e:
             st.error(f"Failed to parse schema: {e}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Pick a model and warm up the GPUs
-# ─────────────────────────────────────────────────────────────────────────────
+# 2. Question + Generate SQL
+question = st.text_input("Question",
+                          placeholder="e.g. What are the names of authors who have written papers in the 'Database' domain?",
+                          disabled=not schema_ready)
 
-st.header("2. Choose a model and warm up")
-
-schema_ready = st.session_state["schema"] is not None
 creds_ready = bool(key and secret)
-
-model = st.radio(
-    "Model",
-    list(MODELS.keys()),
-    index=0,
-    horizontal=True,
-    disabled=not schema_ready,
-    help=MODELS[list(MODELS.keys())[0]]["blurb"]
-    if schema_ready else "Upload a schema first.",
-)
-
-st.caption(MODELS[model]["blurb"])
-
-# Generic question used to wake the containers. Picked so it works for any
-# schema — the retriever still does the full table/column selection.
-_WARM_QUESTION = "How many records are there in total?"
-
-# Auto-warm as soon as a schema is uploaded and credentials are present.
-# No button to click; just upload the schema and the spinner below will
-# show the cold-start load in progress.
-if (
-    schema_ready
-    and creds_ready
-    and st.session_state.get("warmed_model") != model
-):
-    with st.spinner(
-        f"Loading {model} onto the GPU — cold start can take 30–90 s. "
-        f"Once you see ✅ below, ask your question."
-    ):
-        try:
-            t0_warm = time.time()
-            warm_up(
-                model,
-                st.session_state["schema"],
-                st.session_state["fk_graph"],
-                _WARM_QUESTION,
-                key, secret,
-            )
-            st.session_state["warmed_model"] = model
-            st.session_state["warm_seconds"] = time.time() - t0_warm
-            st.toast(f"✅ {model} is warm and ready.", icon="🟢")
-        except Exception as e:
-            st.error(f"❌ Warm-up failed: {e}")
-
-# Persistent warm status so the user always knows the GPU state.
-if st.session_state.get("warmed_model") == model:
-    st.success(f"✅ **{model}** is loaded and ready.")
-elif st.session_state.get("warmed_model"):
-    other = st.session_state["warmed_model"]
-    st.warning(
-        f"⚠ Currently loaded: **{other}**. Switching to **{model}** — "
-        f"reload in progress."
-    )
-elif schema_ready and creds_ready:
-    st.info("Loading the model…")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Ask a question — independent each time, no history stored
-# ─────────────────────────────────────────────────────────────────────────────
-
-st.header("3. Ask a question")
-
-# Question can come from a text input OR a file upload — whichever is
-# non-empty wins. File upload supports .txt and .md.
-question_text = st.text_input(
-    "Question",
-    placeholder="e.g. What are the names of authors who have written papers in the 'Database' domain?",
-    disabled=not schema_ready,
-)
-question_file = st.file_uploader(
-    "...or upload a question file",
-    type=["txt", "md"],
-    disabled=not schema_ready,
-    help="Single question in plain text. The file contents are used as the question.",
-)
-
-question = ""
-if question_text and question_text.strip():
-    question = question_text.strip()
-elif question_file is not None:
-    question = question_file.read().decode("utf-8", errors="replace").strip()
-
-# Keep the button always enabled (subject to schema + creds). Validate the
-# question on click instead of disabling the button — Streamlit text inputs
-# only commit on Enter/blur, which makes pre-commit disabled states feel
-# unresponsive.
-generate = st.button(
-    "Generate SQL",
-    type="primary",
-    disabled=not schema_ready or not creds_ready,
-    help="Run the retriever + model on your question.",
-)
-if generate and not question:
-    st.warning("Type a question or upload a file first.")
+generate = st.button("Generate SQL",
+                     type="primary",
+                     disabled=not schema_ready or not creds_ready)
 
 if generate:
-    if not question:
-        st.warning("Type a question or upload a file first.")
+    if not question.strip():
+        st.warning("Type a question first.")
     else:
-        with st.spinner("Retrieving schema → calling model …"):
+        with st.spinner("Running retriever + model — first request may take 30–90 s for cold start."):
             try:
-                t0 = time.time()
                 retriever_out = retrieve(
                     question,
                     st.session_state["schema"],
                     st.session_state["fk_graph"],
                 )
                 model_input = retriever_out["model_input"]
-                retrieval_ms = (time.time() - t0) * 1000
-
-                cfg = MODELS[model]
-                data = call_modal(cfg["url"], {"input": model_input}, key, secret)
-                total_ms = (time.time() - t0) * 1000
+                data = call_modal({"input": model_input}, key, secret)
             except requests.HTTPError as e:
-                st.error(
-                    f"Modal returned {e.response.status_code}. "
-                    f"Check that Modal-Key/Secret are correct and the endpoint "
-                    f"exists. Body: {e.response.text[:200]}"
-                )
+                st.error(f"Modal returned {e.response.status_code}. "
+                         f"Body: {e.response.text[:200]}")
                 data = None
             except Exception as e:
                 st.error(f"Failed: {e}")
@@ -341,12 +140,6 @@ if generate:
         if data:
             plan = (data.get("plan") or "").strip()
             sql = (data.get("sql") or "").strip()
-            model_secs = (total_ms - retrieval_ms) / 1000
-            st.success(
-                f"Done in {total_ms / 1000:.1f}s "
-                f"(retriever {retrieval_ms / 1000:.1f}s, model {model_secs:.1f}s)"
-            )
-
             col_plan, col_sql = st.columns(2)
             with col_plan:
                 st.subheader("Execution plan")
@@ -354,18 +147,3 @@ if generate:
             with col_sql:
                 st.subheader("SQL")
                 st.code(sql or "(no SQL returned)", language="sql")
-
-            with st.expander("What the retriever sent to the model"):
-                st.code(model_input, language="text")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Footer hint
-# ─────────────────────────────────────────────────────────────────────────────
-
-if not schema_ready:
-    st.info("Upload a `schema.sql` to start.")
-elif not creds_ready:
-    st.info("Add Modal-Key and Modal-Secret in the sidebar.")
-elif st.session_state.get("warmed_model") != model:
-    st.info(f"Loading **{model}** onto the GPU — first run takes 30–90 s.")
