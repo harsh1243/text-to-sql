@@ -165,22 +165,26 @@ elif st.session_state.get("warmed_model"):
              f"Click **Warm up GPU** again to switch.")
 
 
-# 4. Question + Generate SQL
+# 4. Question + Generate SQL — always typed; warm status is enforced
+# at click time. Disabling inputs felt broken because Streamlit shows
+# them as grey but accepts no keystrokes.
 question = st.text_input(
     "Question",
     placeholder="Type a question, then click Generate SQL.",
-    disabled=not is_warm(),
+    disabled=not schema_ready,
 )
 
 generate = st.button(
     "Generate SQL",
     type="primary",
-    disabled=not is_warm() or not creds_ready,
+    disabled=not schema_ready or not creds_ready,
 )
 
 if generate:
     if not question.strip():
         st.warning("Type a question first.")
+    elif not is_warm():
+        st.warning("Click **Warm up GPU** first — selected model isn't loaded yet.")
     else:
         with st.spinner("Running retriever + model…"):
             try:
