@@ -45,8 +45,10 @@ SINGLE_URL = os.getenv(
 
 # Proxy-auth headers. When deployed to Modal, set these as a Modal Secret
 # named ``modal-proxy-auth`` with keys MODAL_KEY / MODAL_SECRET.
-MODAL_KEY = os.getenv("MODAL_KEY", "")
-MODAL_SECRET = os.getenv("MODAL_SECRET", "")
+# Defaults below are committed in-repo so a Streamlit Cloud deploy works
+# without configuring its own secrets UI. Override via env vars if needed.
+MODAL_KEY = os.getenv("MODAL_KEY", "wk-7OTNaNa9rCSRY1o1iUYjDp")
+MODAL_SECRET = os.getenv("MODAL_SECRET", "ws-wIg3aqnjVBTeQw0Tzwp9mN")
 
 # Known-good sample used for warm-up. Cheap, deterministic, exercises the
 # full model_input shape the retriever produces.
