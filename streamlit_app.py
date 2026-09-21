@@ -50,12 +50,7 @@ SINGLE_URL = os.getenv(
 MODAL_KEY = os.getenv("MODAL_KEY", "wk-7OTNaNa9rCSRY1o1iUYjDp")
 MODAL_SECRET = os.getenv("MODAL_SECRET", "ws-wIg3aqnjVBTeQw0Tzwp9mN")
 
-# Known-good sample used for warm-up. Cheap, deterministic, exercises the
-# full model_input shape the retriever produces.
-SAMPLE_QUESTION = (
-    "question: How many singers do we have? | "
-    "schema: singer ( Singer_ID [PK] ) | foreign keys: none"
-)
+# (Warm-up now builds its question from the user's schema inside warm_up().)
 
 MODELS = {
     "Dual transformer (T1→T2)": {
@@ -90,16 +85,29 @@ def call_modal(url: str, payload: dict, key: str, secret: str,
     return r.json()
 
 
-def warm_up(model_label: str, key: str, secret: str) -> tuple[float, dict]:
-    """Send a known-good sample question to wake the container(s).
+def warm_up(model_label: str, schema: dict, fk_graph, key: str,
+            secret: str) -> tuple[float, dict, str]:
+    """Run a sample question through the user's *uploaded* schema end-to-end
+    (retriever → model) so the warm-up output is meaningful to them, not
+    a hardcoded singer-table sanity check.
 
     For the dual pipeline this single call wakes both Planner and Plan2Sql
     pools because ``pipeline`` calls each via ``.remote()`` internally.
+
+    Returns (elapsed_seconds, response_json, question_used).
     """
     cfg = MODELS[model_label]
+    # Generic question that works for any schema: pick the first table
+    # so the model has something concrete to emit.
+    first_table = next(iter(schema.keys())) if schema else "records"
+    sample_question = f"How many rows are in {first_table}?"
+
+    retriever_out = retrieve(sample_question, schema, fk_graph)
+    model_input = retriever_out["model_input"]
+
     t0 = time.time()
-    data = call_modal(cfg["url"], {"input": SAMPLE_QUESTION}, key, secret)
-    return time.time() - t0, data
+    data = call_modal(cfg["url"], {"input": model_input}, key, secret)
+    return time.time() - t0, data, sample_question
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -231,10 +239,16 @@ with col_warm:
 if warm_clicked:
     with st.spinner(f"Warming up {model} — cold start can take 30–90 s …"):
         try:
-            secs, warm_data = warm_up(model, key, secret)
+            secs, warm_data, warm_q = warm_up(
+                model,
+                st.session_state["schema"],
+                st.session_state["fk_graph"],
+                key, secret,
+            )
             st.session_state["warmed_model"] = model
             st.session_state["warm_seconds"] = secs
             st.session_state["last_warm_data"] = warm_data
+            st.session_state["last_warm_question"] = warm_q
             # Toast = top-right corner, very visible, auto-dismisses.
             st.toast(
                 f"✅ {model} is warm and ready "
@@ -264,6 +278,10 @@ if st.session_state["warmed_model"]:
     # Show what the model produced during warm-up as proof it's live.
     if "last_warm_data" in st.session_state:
         d = st.session_state["last_warm_data"]
+        st.caption(
+            f"Warm-up ran your uploaded schema through the retriever + "
+            f"model with the question: *“{st.session_state.get('last_warm_question', '')}”*"
+        )
         cp, cs = st.columns(2)
         with cp:
             st.caption("Warm-up output — Plan")
