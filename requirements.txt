@@ -1,11 +1,15 @@
-# Pinned for Streamlit Community Cloud (and reproducible local installs).
+# Streamlit Community Cloud installs these. Looser pins so pip can resolve
+# versions compatible with whatever Python Streamlit Cloud is currently
+# defaulting to (frequent cause of "Error installing requirements" — a
+# pinned old version has no wheel for the running interpreter).
+#
 # The Modal deployment uses its own image and ignores this file.
-streamlit==1.36.0
-requests==2.32.3
+streamlit>=1.36
+requests>=2.30
 
-# Retriever runs inside the Streamlit process, so these are needed wherever
-# the UI runs. sentence-transformers pulls torch transitively, but pinning
-# the same version as deploy/modal_app.py keeps behaviour identical.
-sentence-transformers==2.6.1
-rank-bm25==0.2.2
-torch==2.3.1
+# Retriever runs inside the Streamlit process, so these are needed
+# wherever the UI runs. Pinning floor versions, not exact versions,
+# avoids wheel-availability failures on Streamlit Cloud.
+sentence-transformers>=2.6
+rank-bm25>=0.2
+torch>=2.0
