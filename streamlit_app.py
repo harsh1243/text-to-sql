@@ -230,17 +230,21 @@ st.caption(MODELS[model]["blurb"])
 # schema — the retriever still does the full table/column selection.
 _WARM_QUESTION = "How many records are there in total?"
 
-col_warm, col_status = st.columns([1, 3])
-with col_warm:
-    warm_clicked = st.button(
-        "Warm up GPUs",
-        disabled=not schema_ready or not creds_ready,
-    )
-
-if warm_clicked:
-    with st.spinner(f"Warming up {model} — cold start can take 30–90 s …"):
+# Auto-warm as soon as a schema is uploaded and credentials are present.
+# No button to click; just upload the schema and the spinner below will
+# show the cold-start load in progress.
+if (
+    schema_ready
+    and creds_ready
+    and st.session_state.get("warmed_model") != model
+):
+    with st.spinner(
+        f"Loading {model} onto the GPU — cold start can take 30–90 s. "
+        f"Once you see ✅ below, ask your question."
+    ):
         try:
-            secs, _, _ = warm_up(
+            t0_warm = time.time()
+            warm_up(
                 model,
                 st.session_state["schema"],
                 st.session_state["fk_graph"],
@@ -248,27 +252,22 @@ if warm_clicked:
                 key, secret,
             )
             st.session_state["warmed_model"] = model
-            st.session_state["warm_seconds"] = secs
-            st.toast(
-                f"✅ {model} is warm and ready "
-                f"(cold start took {secs:.1f}s — next call will be faster)",
-                icon="🟢",
-            )
+            st.session_state["warm_seconds"] = time.time() - t0_warm
+            st.toast(f"✅ {model} is warm and ready.", icon="🟢")
         except Exception as e:
-            st.toast(f"❌ Warm-up failed: {e}", icon="🔴")
-            st.error(f"Warm-up failed: {e}")
+            st.error(f"❌ Warm-up failed: {e}")
 
-if st.session_state["warmed_model"]:
-    with col_status:
-        warm_model = st.session_state["warmed_model"]
-        secs = st.session_state["warm_seconds"]
-        if warm_model == model:
-            st.success(f"**Status: warm.** {warm_model} is ready.")
-        else:
-            st.warning(
-                f"⚠ Currently warm: **{warm_model}**. "
-                f"Click **Warm up GPUs** again to switch to **{model}**."
-            )
+# Persistent warm status so the user always knows the GPU state.
+if st.session_state.get("warmed_model") == model:
+    st.success(f"✅ **{model}** is loaded and ready.")
+elif st.session_state.get("warmed_model"):
+    other = st.session_state["warmed_model"]
+    st.warning(
+        f"⚠ Currently loaded: **{other}**. Switching to **{model}** — "
+        f"reload in progress."
+    )
+elif schema_ready and creds_ready:
+    st.info("Loading the model…")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -277,21 +276,31 @@ if st.session_state["warmed_model"]:
 
 st.header("3. Ask a question")
 
-warm_ready = st.session_state["warmed_model"] == model
-can_ask = schema_ready and warm_ready and creds_ready
-
-question = st.text_input(
+# Question can come from a text input OR a file upload — whichever is
+# non-empty wins. File upload supports .txt and .md.
+question_text = st.text_input(
     "Question",
-    placeholder="e.g. How many singers do we have?",
+    placeholder="e.g. What are the names of authors who have written papers in the 'Database' domain?",
     disabled=not schema_ready,
 )
+question_file = st.file_uploader(
+    "...or upload a question file",
+    type=["txt", "md"],
+    disabled=not schema_ready,
+    help="Single question in plain text. The file contents are used as the question.",
+)
+
+question = ""
+if question_text.strip():
+    question = question_text.strip()
+elif question_file is not None:
+    question = question_file.read().decode("utf-8", errors="replace").strip()
 
 generate = st.button(
     "Generate SQL",
     type="primary",
-    disabled=not can_ask or not question,
-    help="Disabled until a schema is loaded and the selected model is warm."
-         if not can_ask else "Run the retriever and call the model.",
+    disabled=not schema_ready or not question or not creds_ready,
+    help="Run the retriever + model on your question.",
 )
 
 if generate:
@@ -349,5 +358,5 @@ if not schema_ready:
     st.info("Upload a `schema.sql` to start.")
 elif not creds_ready:
     st.info("Add Modal-Key and Modal-Secret in the sidebar.")
-elif not warm_ready:
-    st.info(f"Click **Warm up GPUs** to load **{model}** before asking.")
+elif st.session_state.get("warmed_model") != model:
+    st.info(f"Loading **{model}** onto the GPU — first run takes 30–90 s.")
