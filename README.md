@@ -44,7 +44,7 @@ We implement and compare **two architectures**:
 
 | Model | Dataset | Plan Token F1 | SQL Token F1 |
 |---|---|---|---|
-| Single Transformer | Spider (Gold Schema) | 93.93 | 94.02 |
+| Single Transformer | Spider (Gold Schema) | 91.93 | 90.02 |
 | Dual Transformer | Spider (Gold Schema) | **95.18** | **94.80** |
 | Single Transformer | Spider (Retriever) | 84.95 | 84.68 |
 | Dual Transformer | Spider (Retriever) | 83.99 | 83.96 |
